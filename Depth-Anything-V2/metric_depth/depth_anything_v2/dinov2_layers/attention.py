@@ -73,7 +73,11 @@ class MemEffAttention(Attention):
 
         q, k, v = unbind(qkv, 2)
 
-        x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
+        try:
+            x = memory_efficient_attention(q, k, v, attn_bias=attn_bias)
+        except NotImplementedError:
+            assert attn_bias is None, "xFormers fallback only supports attn_bias=None"
+            return super().forward(x)
         x = x.reshape([B, N, C])
 
         x = self.proj(x)

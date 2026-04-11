@@ -129,6 +129,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.pixi/
 env/
 venv/
 ENV/
@@ -162,3 +163,6 @@ checkpoint/MVD_weights/
 *.out
 
 tmp/
+.pixi/
+.omx/
+checkpoint/segment-anything

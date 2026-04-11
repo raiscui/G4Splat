@@ -67,12 +67,62 @@ def confidence_to_weight(confidence:torch.Tensor):
     return torch.sigmoid((conf_weights - 2.) * 2.)
 
 
+def downsample_gaussians_to_budget(
+    gaussian_params,
+    target_count,
+    initial_voxel_size=0.01,
+    max_rounds=8,
+):
+    """Reduce the initial Gaussian set to a practical budget."""
+    current_count = len(gaussian_params["means"])
+    if target_count is None or current_count <= target_count:
+        sample_idx = torch.arange(current_count)
+        return sample_idx, 1.0, None
+
+    voxel_size = initial_voxel_size
+    sample_idx = None
+
+    for _ in range(max_rounds):
+        candidate_idx, _, = voxel_downsample_gaussians(
+            gaussian_params,
+            voxel_size=voxel_size,
+        )
+        candidate_idx = torch.unique(candidate_idx, sorted=False)
+        if len(candidate_idx) <= target_count:
+            sample_idx = candidate_idx
+            break
+
+        growth = max((len(candidate_idx) / target_count) ** (1 / 3), 1.25)
+        voxel_size *= min(growth * 1.05, 4.0)
+
+    if sample_idx is None:
+        sample_idx = candidate_idx
+
+    if len(sample_idx) > target_count:
+        keep_ids = torch.linspace(0, len(sample_idx) - 1, target_count, device=sample_idx.device)
+        sample_idx = sample_idx[keep_ids.round().long()]
+
+    downsample_factor = current_count / len(sample_idx)
+    return sample_idx, downsample_factor, voxel_size
+
+
+def subsample_init_geometry(pa_points_stack, images, point_stride):
+    """Optionally shrink the init geometry grid before surfel conversion."""
+    if point_stride <= 1:
+        return pa_points_stack, images
+
+    pa_points_stack = pa_points_stack[:, ::point_stride, ::point_stride, :].contiguous()
+    images = [img[::point_stride, ::point_stride].contiguous() for img in images]
+    return pa_points_stack, images
+
+
 def training(
     dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, 
     use_refined_charts, use_mip_filter, dense_data_path, use_chart_view_every_n_iter,
     normal_consistency_from, distortion_from,
     depthanythingv2_checkpoint_dir, depthanything_encoder, 
-    dense_regul, refine_depth_path, use_downsample_gaussians
+    dense_regul, refine_depth_path, use_downsample_gaussians,
+    max_init_gaussians, init_voxel_size, max_init_input_views, init_point_stride,
 ):
     
     save_log_images = False
@@ -141,8 +191,12 @@ def training(
 
     # ===================================================================================
     # Initialize gaussians
-    max_gaussians_num = 10_000_000
-    print(f"Max gaussians num: {max_gaussians_num}, use downsample gaussians: {use_downsample_gaussians}")
+    max_gaussians_num = max_init_gaussians
+    print(
+        f"Max init gaussians: {max_gaussians_num}, "
+        f"use downsample gaussians: {use_downsample_gaussians}, "
+        f"init voxel size: {init_voxel_size}"
+    )
 
     input_view_depths = pa_depths[:input_view_num]
     input_view_depths_stack = torch.stack(input_view_depths, dim=0).cuda()
@@ -150,7 +204,7 @@ def training(
     pa_points = depths_to_points_parallel(input_view_depths_stack, scene.getTrainCameras())
     N, H, W = input_view_depths_stack.shape
     pa_points = pa_points.reshape(N, H, W, 3)
-    max_init_gs_input_view_num = 50                     # NOTE: hard code for gs initialization when using dense views
+    max_init_gs_input_view_num = max_init_input_views
     if input_view_num > max_init_gs_input_view_num:
         print(f'[INFO]: Input view num is too large: {input_view_num}, use {max_init_gs_input_view_num} views for gs initialization')
         init_view_ids = np.linspace(0, input_view_num - 1, max_init_gs_input_view_num, dtype=int)
@@ -160,6 +214,16 @@ def training(
     else:
         init_pa_points_stack = pa_points
         init_images = _images
+
+    init_pa_points_stack, init_images = subsample_init_geometry(
+        init_pa_points_stack,
+        init_images,
+        init_point_stride,
+    )
+    print(
+        f"[INFO]: Init geometry uses {init_pa_points_stack.shape[0]} views at "
+        f"{init_pa_points_stack.shape[1]}x{init_pa_points_stack.shape[2]} with stride {init_point_stride}"
+    )
 
     input_view_gaussian_params = get_gaussian_parameters_from_pa_data(
         pa_points=init_pa_points_stack,
@@ -217,9 +281,19 @@ def training(
         gaussian_params = input_view_gaussian_params
 
     # Downsample gaussians
-    if len(gaussian_params['means']) > max_gaussians_num and use_downsample_gaussians:
-        sample_idx, downsample_factor = voxel_downsample_gaussians(gaussian_params, voxel_size=0.01)
-        print(f"Downsampled {len(gaussian_params['means'])} gaussians to {len(sample_idx)} gaussians...")
+    should_downsample = use_downsample_gaussians or len(gaussian_params['means']) > max_gaussians_num
+    if should_downsample:
+        sample_idx, downsample_factor, final_voxel_size = downsample_gaussians_to_budget(
+            gaussian_params,
+            target_count=max_gaussians_num,
+            initial_voxel_size=init_voxel_size,
+        )
+        print(
+            f"Downsampled {len(gaussian_params['means'])} gaussians to "
+            f"{len(sample_idx)} gaussians"
+            + (f" with voxel size {final_voxel_size:.5f}" if final_voxel_size is not None else "")
+            + "."
+        )
     else:
         sample_idx = torch.arange(len(gaussian_params['means']))
         downsample_factor = 1.0
@@ -704,6 +778,10 @@ if __name__ == "__main__":
     pp = PipelineParams(parser)
     parser.add_argument("--refine_depth_path", type=str, required=True)
     parser.add_argument("--use_downsample_gaussians", action="store_true", help="Use downsample gaussians")
+    parser.add_argument("--max_init_gaussians", type=int, default=10_000_000)
+    parser.add_argument("--init_voxel_size", type=float, default=0.01)
+    parser.add_argument("--max_init_input_views", type=int, default=50)
+    parser.add_argument("--init_point_stride", type=int, default=1)
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=None)  # 6009
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
@@ -744,7 +822,9 @@ if __name__ == "__main__":
         args.dense_data_path, args.use_chart_view_every_n_iter,
         args.normal_consistency_from, args.distortion_from,
         args.depthanythingv2_checkpoint_dir, args.depthanything_encoder,
-        args.dense_regul, args.refine_depth_path, args.use_downsample_gaussians
+        args.dense_regul, args.refine_depth_path, args.use_downsample_gaussians,
+        args.max_init_gaussians, args.init_voxel_size,
+        args.max_init_input_views, args.init_point_stride,
     )
 
     # All done

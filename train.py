@@ -69,6 +69,15 @@ if __name__ == '__main__':
     )
 
     # G4Splat config
+    parser.add_argument('--resolution', type=int, default=1,
+        help='Downsampling factor for image-based stages. Use 1 for original size, 2 for half-resolution, 4 for quarter-resolution.'
+    )
+    parser.add_argument('--merge_resolution_scale', type=float, default=1.0,
+        help='Downscale only the merge_global_3Dplane camera/mask resolution. Use 2.0 for half resolution.'
+    )
+    parser.add_argument('--merge_device', type=str, default='cpu', choices=['cpu', 'cuda'],
+        help='Device for merge_global_3Dplane tensors.'
+    )
     parser.add_argument('--select_inpaint_num', type=int, default=20, help='Number of views to select for inpainting.')
     parser.add_argument('--use_downsample_gaussians', action='store_true', help='Use downsample gaussians for training')
     parser.add_argument('--use_mesh_filter', action='store_true', help='Use mesh filter')
@@ -159,6 +168,7 @@ if __name__ == '__main__':
         "--mast3r_scene", mast3r_scene_path,
         "--output_path", free_gaussians_path,
         "--config", args.free_gaussians_config,
+        "--resolution", str(args.resolution),
         dense_arg,
         "--dense_regul", args.dense_regul,
         "--refine_depth_path", plane_root_path,
@@ -169,6 +179,7 @@ if __name__ == '__main__':
         "python", "2d-gaussian-splatting/render_multires.py",
         "--source_path", mast3r_scene_path,
         "--model_path", free_gaussians_path,
+        "--resolution", str(args.resolution),
         "--skip_test",
         "--skip_mesh",
         "--render_all_img",
@@ -200,6 +211,7 @@ if __name__ == '__main__':
         "--source_path", mast3r_scene_path,
         "--model_path", free_gaussians_path,
         "--plane_root_dir", plane_root_path,
+        "--resolution", str(args.resolution),
         "--iteration", '7000',
         "--see3d_stage", str(stage),
         "--select_inpaint_num", str(select_inpaint_num),
@@ -216,6 +228,7 @@ if __name__ == '__main__':
         "python", "2d-gaussian-splatting/render_chart_views.py",
         "--source_path", mast3r_scene_path,
         "--save_root_path", plane_root_path,
+        "--resolution", str(args.resolution),
     ])
 
     generate_2Dplane_command = " ".join([
@@ -234,6 +247,9 @@ if __name__ == '__main__':
                     "--source_path", mast3r_scene_path,
                     "--plane_root_path", plane_root_path,
                     "--pnts_path", pnts_path,
+                    "--resolution", str(args.resolution),
+                    "--merge_resolution_scale", str(args.merge_resolution_scale),
+                    "--merge_device", args.merge_device,
                     "--anchor_view_id_json_path", anchor_view_id_json_path,
                     "--see3d_root_path", see3d_root_path,
                 ])
@@ -243,6 +259,9 @@ if __name__ == '__main__':
                     "--source_path", mast3r_scene_path,
                     "--plane_root_path", plane_root_path,
                     "--pnts_path", pnts_path,
+                    "--resolution", str(args.resolution),
+                    "--merge_resolution_scale", str(args.merge_resolution_scale),
+                    "--merge_device", args.merge_device,
                     "--see3d_root_path", see3d_root_path,
                 ])
         else:
@@ -251,6 +270,9 @@ if __name__ == '__main__':
                 "--source_path", mast3r_scene_path,
                 "--plane_root_path", plane_root_path,
                 "--pnts_path", pnts_path,
+                "--resolution", str(args.resolution),
+                "--merge_resolution_scale", str(args.merge_resolution_scale),
+                "--merge_device", args.merge_device,
             ])
         
     see3d_root_path = os.path.join(mast3r_scene_path, 'see3d_render')
@@ -281,6 +303,7 @@ if __name__ == '__main__':
             "python", "2d-gaussian-splatting/render_dense_views.py",
             "--source_path", mast3r_scene_path,
             "--model_path", free_gaussians_path,
+            "--resolution", str(args.resolution),
             "--iteration", "7000",
         ])
         run_command_safe(render_dense_views_command)

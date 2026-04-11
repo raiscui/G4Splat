@@ -27,6 +27,8 @@ def eval_images(source_path, pred_img_root_path, test_views_list):
         gt_img_path = os.path.join(img_data_path, img_data_list[view_id])
         render = Image.open(pred_img_path)
         gt = Image.open(gt_img_path)
+        if gt.size != render.size:
+            gt = gt.resize(render.size, Image.LANCZOS)
         renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
         gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
 
@@ -58,6 +60,8 @@ def eval_images_temp(source_path, pred_img_root_path, test_views_list, only_psnr
         gt_img_path = os.path.join(img_data_path, img_data_list[view_id])
         render = Image.open(pred_img_path)
         gt = Image.open(gt_img_path)
+        if gt.size != render.size:
+            gt = gt.resize(render.size, Image.LANCZOS)
         renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
         gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
 

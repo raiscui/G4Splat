@@ -7,14 +7,25 @@ include(FetchContent)
 # CMake.
 set(CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 set(CMAKE_BUILD_TYPE "Release")
+include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 
 find_library(libcnpy cnpy ${CONDA_PREFIX}/lib)
 include_directories(${CONDA_PREFIX}/include)
 
 # TODO: fix this
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 find_package(Torch REQUIRED)
 find_package(CGAL REQUIRED)
 # find_package(pybind11 REQUIRED)
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -c "import torch; print(1 if torch.compiled_with_cxx11_abi() else 0)"
+    OUTPUT_VARIABLE TORCH_CXX11_ABI
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=0" "" TORCH_CXX_FLAGS_SANITIZED "${TORCH_CXX_FLAGS}")
+string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=1" "" TORCH_CXX_FLAGS_SANITIZED "${TORCH_CXX_FLAGS_SANITIZED}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS_SANITIZED} -D_GLIBCXX_USE_CXX11_ABI=${TORCH_CXX11_ABI}")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=${TORCH_CXX11_ABI}")
 
 include(FetchContent)
 FetchContent_Declare(
@@ -61,6 +72,7 @@ pybind11_add_module(tetranerf_cpp_extension
 
 target_link_libraries(tetranerf_cpp_extension PRIVATE ${CUDA_LIBRARIES} ${TORCH_LIBRARIES})
 target_link_libraries(tetranerf_cpp_extension PRIVATE CGAL::CGAL)
+target_include_directories(tetranerf_cpp_extension PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 target_compile_features(tetranerf_cpp_extension PRIVATE cxx_std_17)
 set_target_properties(tetranerf_cpp_extension
     PROPERTIES

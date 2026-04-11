@@ -136,9 +136,14 @@ if __name__ == "__main__":
 
                     cam = src_camera_data[src_image_data[k].camera_id]
                     if cam.model == 'PINHOLE':
-                        fx,fy,cx,cy = cam.params
+                        fx, fy, cx, cy = cam.params
+                    elif cam.model == 'SIMPLE_PINHOLE':
+                        f, cx, cy = cam.params
+                        fx = fy = f
                     else:
-                        raise NotImplementedError('Only PINHOLE model is supported for now.')
+                        raise NotImplementedError(
+                            f'Only PINHOLE and SIMPLE_PINHOLE models are supported for now, got {cam.model}.'
+                        )
                     src_intrinsics[img_name] = np.array([
                         [fx, 0., cx],
                         [0., fy, cy],

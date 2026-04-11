@@ -17,13 +17,15 @@ if __name__ == '__main__':
     parser.add_argument('--source_path', type=str, required=True)
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--plane_root_dir", type=str, required=True)
+    parser.add_argument('--resolution', type=int, default=1,
+                        help='Image downsampling factor forwarded to novel-view rendering. Use 2 for half-resolution.')
     parser.add_argument("--iteration", required=True, type=str)
     parser.add_argument("--see3d_stage", required=True, type=int)
     parser.add_argument("--select_inpaint_num", required=True, type=str)
     args = parser.parse_args()
 
     # 1. render novel views
-    command = f"python 2d-gaussian-splatting/render_novel_views.py --source_path {args.source_path} --model_path {args.model_path} --iteration {args.iteration} --see3d_stage {args.see3d_stage} --select_inpaint_num {args.select_inpaint_num}"
+    command = f"python 2d-gaussian-splatting/render_novel_views.py --source_path {args.source_path} --model_path {args.model_path} --resolution {args.resolution} --iteration {args.iteration} --see3d_stage {args.see3d_stage} --select_inpaint_num {args.select_inpaint_num}"
     run_command_safe(command)
 
     ref_image_path = os.path.join(args.source_path, 'see3d_render', 'ref-views')

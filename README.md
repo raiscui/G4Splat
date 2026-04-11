@@ -44,6 +44,40 @@
 
 ### 1.1. Install dependencies
 
+We provide a `pixi.toml` manifest for this repository. It is configured to match the
+working `/home/rais/VerseCrafter` baseline as closely as practical on this machine:
+Python 3.11 with PyTorch 2.10.0 / CUDA 12.8 wheels. Native build tasks reserve 4 CPU
+cores by default and auto-detect a single `TORCH_CUDA_ARCH_LIST` target unless you
+override `MAX_JOBS` or `TORCH_CUDA_ARCH_LIST` yourself.
+
+```shell
+# Optional: enable proxy only when your current network path needs it.
+export https_proxy=http://127.0.0.1:7897
+export http_proxy=http://127.0.0.1:7897
+export all_proxy=socks5://127.0.0.1:7897
+
+pixi install
+pixi run bootstrap
+pixi run verify-env
+
+# Detectron2 is only used for visualization utilities.
+# Install it separately if you need those code paths.
+pixi run install-detectron2
+```
+
+Notes:
+
+- `bootstrap` includes `xformers`, `segment-anything`, `pytorch3d`, the 2DGS CUDA
+  extensions, tetra-triangulation, and the MASt3R native extensions.
+- If you want even stricter CPU throttling during native builds, override `MAX_JOBS`
+  or use `PYTORCH3D_RESERVED_CPUS`, `LOCAL_EXT_RESERVED_CPUS`, `XFORMERS_RESERVED_CPUS`,
+  and `DETECTRON2_RESERVED_CPUS`.
+- When downloading checkpoints or datasets mirrored from Hugging Face, prefer checking
+  ModelScope first. On this machine, ModelScope downloads are usually faster without
+  proxy, so you can temporarily unset proxy variables for those commands.
+
+If you prefer the original manual setup, follow the legacy steps below:
+
 Please follow the instructions below to install the dependencies:
 
 ```shell
@@ -179,5 +213,3 @@ Some codes are borrowed from [MAtCha](https://github.com/Anttwo/MAtCha), [Neural
     year={2026}
 }
 ```
-
-

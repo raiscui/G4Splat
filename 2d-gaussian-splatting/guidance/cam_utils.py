@@ -1396,9 +1396,11 @@ def project_points_to_image(camera, points):
     # Calculate world-to-camera rotation (transpose of camera-to-world rotation)
     R_w2c = R_c2w.T
 
-    # Convert to tensors
-    T_w2c = to_tensor_safe(T_w2c)
-    R_w2c = to_tensor_safe(R_w2c)
+    # Keep projection work on the same device as the input points so callers can
+    # intentionally run large preprocessing passes on CPU to avoid GPU OOMs.
+    device = points.device
+    T_w2c = to_tensor_safe(T_w2c, device=device)
+    R_w2c = to_tensor_safe(R_w2c, device=device)
     
     # Get camera frustum parameters
     image_height, image_width = camera.image_height, camera.image_width
@@ -1883,4 +1885,3 @@ class MiniCam:
         )
         self.full_proj_transform = self.world_view_transform @ self.projection_matrix
         self.camera_center = torch.tensor(c2w[:3, 3]).cuda()                     # TODO: need check whether this is correct, camera center used to compute the SH
-

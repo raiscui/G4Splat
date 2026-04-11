@@ -296,13 +296,18 @@ sceneLoadTypeCallbacks = {
 
 # NOTE: load gaussian cameras
 def fill_config_args(args):
-    args.sh_degree = 3
-    args.images = 'images'
-    args.resolution = -1
-    args.white_background = False
-    args.data_device = "cuda"
-    args.eval = False
-    args.render_items=['RGB', 'Alpha', 'Normal', 'Depth', 'Edge', 'Curvature']
+    defaults = {
+        "sh_degree": 3,
+        "images": "images",
+        "resolution": -1,
+        "white_background": False,
+        "data_device": "cuda",
+        "eval": False,
+        "render_items": ['RGB', 'Alpha', 'Normal', 'Depth', 'Edge', 'Curvature'],
+    }
+    for key, value in defaults.items():
+        if not hasattr(args, key) or getattr(args, key) is None:
+            setattr(args, key, value)
 
     return args
 

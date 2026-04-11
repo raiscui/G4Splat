@@ -16,6 +16,16 @@ def run_command_safe(command):
     else:
         print("Command succeeded!")
 
+
+def append_optional_arg(command_parts, flag, value):
+    if value is None:
+        return
+    if isinstance(value, bool):
+        if value:
+            command_parts.append(flag)
+        return
+    command_parts.extend([flag, str(value)])
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
@@ -32,6 +42,8 @@ if __name__ == '__main__':
     
     # Config
     parser.add_argument('-c', '--config', type=str, default='default')
+    parser.add_argument('--resolution', type=int, default=1,
+                        help='Image downsampling factor forwarded to 2DGS training. Use 2 for half-resolution.')
 
     parser.add_argument('--refine_depth_path', type=str, default=None, help='Path to the refine depth directory')
     parser.add_argument('--use_downsample_gaussians', action='store_true', help='Use downsample gaussians')
@@ -68,7 +80,7 @@ if __name__ == '__main__':
     # Define command
     if args.refine_depth_path is not None:
         print(f'refine depth path {args.refine_depth_path}, train gs use refine depth')
-        command = " ".join([
+        command_parts = [
             "python", "2d-gaussian-splatting/train_with_refine_depth.py",
             "-s", args.mast3r_scene,
             "-m", args.output_path,
@@ -76,16 +88,32 @@ if __name__ == '__main__':
             "--densify_until_iter", str(config['densify_until_iter']),
             "--opacity_reset_interval", str(config['opacity_reset_interval']),
             "--depth_ratio", str(config['depth_ratio']),
-            "--use_mip_filter" if config['use_mip_filter'] else "",
-            dense_arg,
+            "--resolution", str(args.resolution),
             "--normal_consistency_from", str(config['normal_consistency_from']),
             "--distortion_from", str(config['distortion_from']),
             "--depthanythingv2_checkpoint_dir", args.depthanythingv2_checkpoint_dir,
             "--depthanything_encoder", args.depthanything_encoder,
             "--dense_regul", args.dense_regul,
             "--refine_depth_path", args.refine_depth_path,
-            "--use_downsample_gaussians" if args.use_downsample_gaussians else "",
-        ])
+        ]
+        if dense_arg:
+            command_parts.extend(dense_arg.split())
+
+        append_optional_arg(command_parts, "--use_mip_filter", config.get("use_mip_filter", False))
+        append_optional_arg(command_parts, "--densify_from_iter", config.get("densify_from_iter"))
+        append_optional_arg(command_parts, "--densification_interval", config.get("densification_interval"))
+        append_optional_arg(command_parts, "--densify_grad_threshold", config.get("densify_grad_threshold"))
+        append_optional_arg(command_parts, "--opacity_cull", config.get("opacity_cull"))
+        append_optional_arg(command_parts, "--percent_dense", config.get("percent_dense"))
+        append_optional_arg(command_parts, "--max_init_gaussians", config.get("max_init_gaussians"))
+        append_optional_arg(command_parts, "--init_voxel_size", config.get("init_voxel_size"))
+        append_optional_arg(command_parts, "--max_init_input_views", config.get("max_init_input_views"))
+        append_optional_arg(command_parts, "--init_point_stride", config.get("init_point_stride"))
+
+        if args.use_downsample_gaussians or config.get("use_downsample_gaussians", False):
+            command_parts.append("--use_downsample_gaussians")
+
+        command = " ".join(command_parts)
     else:
         raise ValueError('refine depth path is required')
     

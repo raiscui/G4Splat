@@ -18,8 +18,9 @@ from matcha.pointmap.base import PointMap
 from matcha.pointmap.utils import load_colmap_scene
 try:
     from matcha.pointmap.dust3r import compute_dust3r_scene
-except:
-    print("Dust3R not found.")
+except Exception as exc:
+    compute_dust3r_scene = None
+    print(f"[INFO] Dust3R not found; MASt3R/DepthAnything paths remain available. ({exc})")
 from matcha.pointmap.mast3r import compute_mast3r_scene
 from matcha.dm_scene.cameras import CamerasWrapper, P3DCameras
 from matcha.dm_utils.rendering import fov2focal
@@ -815,6 +816,12 @@ def get_pointmap_from_dust3r_scene_with_depthanything(
     device='cuda',
     return_sfm_data=False,
 ):
+    if compute_dust3r_scene is None:
+        raise ImportError(
+            "Dust3R support is unavailable in this environment. "
+            "Install Dust3R or use the MASt3R-based pointmap path instead."
+        )
+
     # Get SfM data from DUSt3R
     dust3r_sfm_data = compute_dust3r_scene(
         scene_source_path=scene_source_path,

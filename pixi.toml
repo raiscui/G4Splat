@@ -1,0 +1,74 @@
+[workspace]
+name = "g4splat"
+version = "0.1.0"
+channels = ["pytorch", "nvidia", "conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.11.*"
+pip = "*"
+git = "*"
+cmake = "*"
+ninja = "*"
+make = "*"
+setuptools = "*"
+wheel = "*"
+cython = "3.0.*"
+ffmpeg = "*"
+gmp = "*"
+cgal = "*"
+pybind11 = "*"
+faiss-gpu = ">=1.10,<1.11"
+
+[pypi-dependencies]
+# 尽量对齐 /home/rais/VerseCrafter 已验证通过的 Python / CUDA / PyTorch 组合。
+torch = { version = "==2.10.0", index = "https://download.pytorch.org/whl/cu128" }
+torchvision = { version = "==0.25.0", index = "https://download.pytorch.org/whl/cu128" }
+torchaudio = { version = "==2.10.0", index = "https://download.pytorch.org/whl/cu128" }
+
+fvcore = "*"
+iopath = "*"
+open3d = "==0.18.0"
+trimesh = "==4.6.4"
+pyglet = "==1.5.29"
+numpy = "==1.26.4"
+scipy = "==1.13.1"
+opencv-python = "==4.11.0.86"
+matplotlib = "==3.9.4"
+scikit-learn = "==1.6.1"
+scikit-image = "==0.21.0"
+einops = "==0.8.1"
+roma = "==1.5.0"
+transformers = "==4.28.1"
+diffusers = "==0.25.1"
+accelerate = "==1.6.0"
+tensorboard = "*"
+tqdm = "==4.67.1"
+rich = "*"
+plyfile = "==0.8.1"
+gradio = "==4.44.1"
+gradio-imageslider = "*"
+huggingface-hub = "==0.22.2"
+modelscope = "*"
+imageio = "*"
+mediapy = "*"
+pytransform3d = "*"
+lpips = "==0.1.4"
+kiui = "*"
+easydict = "*"
+packaging = "*"
+pyaml = "*"
+pyyaml = "*"
+pillow = "==10.2.0"
+
+[tasks]
+install-xformers = "bash ./scripts/install_xformers.sh"
+install-segment-anything = "bash ./scripts/install_segment_anything.sh"
+install-pytorch3d = "bash ./scripts/install_pytorch3d.sh"
+install-local-extensions = "bash ./scripts/install_local_extensions.sh"
+install-detectron2 = "bash ./scripts/install_detectron2.sh"
+verify-env = "bash ./scripts/verify_env.sh"
+
+# detectron2 在上游 README 中只用于可视化，默认不阻塞核心训练环境。
+bootstrap = { depends-on = ["install-xformers", "install-segment-anything", "install-pytorch3d", "install-local-extensions"] }
+bootstrap-all = { depends-on = ["bootstrap", "install-detectron2"] }

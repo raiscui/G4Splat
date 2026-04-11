@@ -1,0 +1,27 @@
+type: '2dgs'
+
+iterations: 7000
+
+# Keep the same overall training shape as the balanced preset.
+densify_from_iter: 500
+densify_until_iter: 2600
+densification_interval: 100
+densify_grad_threshold: 0.0003
+
+opacity_reset_interval: 1000
+opacity_cull: 0.03
+percent_dense: 0.01
+
+depth_ratio: 0.5
+normal_consistency_from: 3500
+distortion_from: 1500
+
+use_mip_filter: true
+use_downsample_gaussians: true
+
+max_init_gaussians: 1200000
+init_voxel_size: 0.01
+
+# OOM guardrails for the surfel initialization stage.
+max_init_input_views: 12
+init_point_stride: 2

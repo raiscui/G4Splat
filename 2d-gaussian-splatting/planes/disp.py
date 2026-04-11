@@ -1,5 +1,3 @@
-from detectron2.utils.visualizer import GenericMask
-from detectron2.utils.visualizer import Visualizer
 from typing import Literal, Union
 from pathlib import Path
 
@@ -10,6 +8,16 @@ import torch
 import trimesh
 
 from PIL import Image, ImageOps
+
+try:
+    from detectron2.utils.visualizer import GenericMask
+    from detectron2.utils.visualizer import Visualizer
+
+    _HAS_DETECTRON2 = True
+except ModuleNotFoundError:
+    GenericMask = None
+    Visualizer = None
+    _HAS_DETECTRON2 = False
 
 # define camera frustum geometry
 focal = 1.0
@@ -110,18 +118,41 @@ class ColorPalette(object):
             count += 1
 
 def overlay_masks(img, masks, alpha=0.4):
-    vis = Visualizer(img)
-    masks = [GenericMask(_, vis.output.height, vis.output.width) for _ in masks]
+    if _HAS_DETECTRON2:
+        vis = Visualizer(img)
+        masks = [GenericMask(_, vis.output.height, vis.output.width) for _ in masks]
 
-    color_palette = ColorPalette(num_of_colors=len(masks))
+        color_palette = ColorPalette(num_of_colors=len(masks))
 
-    vis.overlay_instances(
-        masks=masks,
-        assigned_colors=[color_palette(i, type='float').tolist() for i in range(len(masks)) ],
-        alpha=alpha
-    )
+        vis.overlay_instances(
+            masks=masks,
+            assigned_colors=[color_palette(i, type='float').tolist() for i in range(len(masks)) ],
+            alpha=alpha
+        )
 
-    return vis.output.get_image()
+        return vis.output.get_image()
+
+    base = np.asarray(img).copy()
+    if base.dtype != np.uint8:
+        base = np.clip(base, 0, 255).astype(np.uint8)
+
+    color_palette = ColorPalette(num_of_colors=max(len(masks), 1))
+    overlay = base.astype(np.float32)
+
+    for idx, mask in enumerate(masks):
+        mask_arr = np.asarray(mask).astype(bool)
+        if mask_arr.ndim != 2:
+            mask_arr = np.squeeze(mask_arr)
+        if mask_arr.shape != base.shape[:2]:
+            raise ValueError(f"Mask shape {mask_arr.shape} does not match image shape {base.shape[:2]}")
+
+        color = color_palette(idx, type='float') * 255.0
+        overlay[mask_arr] = (1.0 - alpha) * overlay[mask_arr] + alpha * color
+
+        contours, _ = cv2.findContours(mask_arr.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(overlay, contours, -1, color.tolist(), 1)
+
+    return np.clip(overlay, 0, 255).astype(np.uint8)
 
 # copy-paste from ACE: https://github.com/nianticlabs/ace
 def get_image_box(

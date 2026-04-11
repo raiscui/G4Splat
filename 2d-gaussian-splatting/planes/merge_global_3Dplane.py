@@ -260,6 +260,19 @@ if __name__ == "__main__":
     parser.add_argument("--plane_root_path", type=str, required=True)
     parser.add_argument("--see3d_root_path", type=str, default=None)
     parser.add_argument("--vis_plane_path", type=str, default=None)
+    parser.add_argument(
+        "--resolution_scale",
+        type=float,
+        default=1.0,
+        help="Downscale camera/mask resolution for plane merging. Use 2.0 for half resolution.",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        choices=["cpu", "cuda"],
+        help="Device for global plane merging tensors.",
+    )
     model = ModelParams(parser, sentinel=True)
     args = parser.parse_args()
 
@@ -267,7 +280,20 @@ if __name__ == "__main__":
     # Initialize system state (RNG)
     safe_state(False)
 
-    train_viewpoints, _ = load_cameras(model.extract(args))
+    merge_device = "cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
+    print(f"[INFO]: Merge global 3D plane tensors on {merge_device}")
+
+    camera_args = model.extract(args)
+    camera_args.data_device = "cpu"
+    if args.resolution_scale != 1.0:
+        print(f"[INFO]: Merge global 3D plane at 1/{args.resolution_scale:g} resolution")
+        train_viewpoints, _ = load_cameras(
+            camera_args,
+            resolution_scales=[args.resolution_scale],
+            scale=args.resolution_scale,
+        )
+    else:
+        train_viewpoints, _ = load_cameras(camera_args)
 
     if args.see3d_root_path is not None:
         camera_path = os.path.join(args.see3d_root_path, 'see3d_cameras.npz')
@@ -284,7 +310,15 @@ if __name__ == "__main__":
     for i in range(len(train_viewpoints)):
         plane_mask_path = os.path.join(plane_root_path, f"plane_mask_frame{i:06d}.npy")
         plane_mask = np.load(plane_mask_path)
-        plane_mask = torch.tensor(plane_mask, dtype=torch.int).cuda()
+        target_h = int(train_viewpoints[i].image_height)
+        target_w = int(train_viewpoints[i].image_width)
+        if plane_mask.shape[:2] != (target_h, target_w):
+            plane_mask = cv2.resize(
+                plane_mask.astype(np.int32),
+                (target_w, target_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        plane_mask = torch.tensor(plane_mask, dtype=torch.int, device=merge_device)
         plane_masks.append(plane_mask)
 
     # load last refine points
@@ -295,7 +329,7 @@ if __name__ == "__main__":
     for refine_points_file_name_i in refine_points_file_name:
         pnts_path = os.path.join(plane_root_path, refine_points_file_name_i)                # last refine points
         pnts_i = trimesh.load(pnts_path).vertices
-        pnts_i = torch.tensor(pnts_i, dtype=torch.float32).cuda()
+        pnts_i = torch.tensor(pnts_i, dtype=torch.float32, device=merge_device)
         pnts_list.append(pnts_i)
 
     # load need inpaint views points (this stage seen points)
@@ -304,7 +338,7 @@ if __name__ == "__main__":
     for need_inpaint_points_file_name_i in need_inpaint_points_file_name:
         pnts_path = os.path.join(plane_root_path, need_inpaint_points_file_name_i)          # this stage seen points
         pnts_i = trimesh.load(pnts_path).vertices
-        pnts_i = torch.tensor(pnts_i, dtype=torch.float32).cuda()
+        pnts_i = torch.tensor(pnts_i, dtype=torch.float32, device=merge_device)
         pnts_list.append(pnts_i)
 
     # load dense view points (when use dense view for training)
@@ -313,14 +347,14 @@ if __name__ == "__main__":
     for dense_view_points_file_name_i in dense_view_points_file_name:
         pnts_path = os.path.join(plane_root_path, dense_view_points_file_name_i)          # dense view points
         pnts_i = trimesh.load(pnts_path).vertices
-        pnts_i = torch.tensor(pnts_i, dtype=torch.float32).cuda()
+        pnts_i = torch.tensor(pnts_i, dtype=torch.float32, device=merge_device)
         pnts_list.append(pnts_i)
 
     if len(pnts_list) == 0:
         # load default chart pnts
         pnts_path = args.pnts_path
         pnts = trimesh.load(pnts_path).vertices
-        pnts = torch.tensor(pnts, dtype=torch.float32).cuda()
+        pnts = torch.tensor(pnts, dtype=torch.float32, device=merge_device)
         print(f'********** load default chart pnts from {pnts_path} **********')
     else:
         pnts = torch.cat(pnts_list, dim=0)
@@ -390,5 +424,3 @@ if __name__ == "__main__":
                 print(f'plane{plane_id} mask saved')
 
         print('local plane pnts saved over')
-
-

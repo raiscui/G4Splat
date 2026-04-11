@@ -17,6 +17,7 @@ from guidance.cam_utils import build_visibility_masks
 import cv2
 import matplotlib.pyplot as plt
 import trimesh
+from PIL import Image
 
 def save_tensor_as_pcd(pcd, path, pcd_colors=None):
 
@@ -79,6 +80,10 @@ def create_vis_frequency_heatmap(rgb_image, match_mask, transparency = 0.8, colo
         blended[:, :, i] = rgb_image[:, :, i] * (1 - transparency) + heatmap_rgb[:, :, i] * transparency
     
     return blended.astype(np.uint8)
+
+def camera_image_to_uint8(camera):
+    image = camera.original_image.detach().cpu().permute(1, 2, 0).numpy()
+    return np.clip(image * 255.0, 0, 255).astype(np.uint8)
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -168,13 +173,8 @@ if __name__ == "__main__":
     visibility_times_masks = build_visibility_masks(train_viewpoints, charts_depths, charts_points, mast3r_matching=None, return_origin_masks=True)
     vis_points = []
     for idx in range(len(visibility_times_masks)):
-        rgb_name = train_viewpoints[idx].image_name
-        rgb_path = os.path.join(args.source_path, f'images/{rgb_name}.png')
-        dst_rgb_path = os.path.join(train_save_root_path, f'rgb_frame{idx:06d}.png')
-        shutil.copy(rgb_path, dst_rgb_path)
-
-        rgb_image = cv2.imread(rgb_path)
-        rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)  # Convert BGR to RGB
+        rgb_image = camera_image_to_uint8(train_viewpoints[idx])
+        Image.fromarray(rgb_image).save(os.path.join(train_save_root_path, f'rgb_frame{idx:06d}.png'))
         match_mask = visibility_times_masks[idx][0].detach().cpu().numpy()
         np.save(os.path.join(train_save_root_path, f'visibility_frame{idx:06d}.npy'), match_mask)
         blended = create_vis_frequency_heatmap(rgb_image, match_mask)
@@ -214,4 +214,3 @@ if __name__ == "__main__":
         shutil.copy(os.path.join(train_save_root_path, f'visibility_frame{idx:06d}.png'), os.path.join(args.save_root_path, f'visibility_frame{idx:06d}.png'))
 
     print(f'Train views render done!')
-
