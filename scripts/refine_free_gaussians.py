@@ -44,6 +44,8 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--config', type=str, default='default')
     parser.add_argument('--resolution', type=int, default=1,
                         help='Image downsampling factor forwarded to 2DGS training. Use 2 for half-resolution.')
+    parser.add_argument('--checkpoint_iterations', type=int, nargs='*', default=None,
+                        help='Checkpoint iteration list forwarded to 2DGS training.')
 
     parser.add_argument('--refine_depth_path', type=str, default=None, help='Path to the refine depth directory')
     parser.add_argument('--use_downsample_gaussians', action='store_true', help='Use downsample gaussians')
@@ -109,6 +111,10 @@ if __name__ == '__main__':
         append_optional_arg(command_parts, "--init_voxel_size", config.get("init_voxel_size"))
         append_optional_arg(command_parts, "--max_init_input_views", config.get("max_init_input_views"))
         append_optional_arg(command_parts, "--init_point_stride", config.get("init_point_stride"))
+
+        if args.checkpoint_iterations:
+            command_parts.append("--checkpoint_iterations")
+            command_parts.extend([str(iteration) for iteration in args.checkpoint_iterations])
 
         if args.use_downsample_gaussians or config.get("use_downsample_gaussians", False):
             command_parts.append("--use_downsample_gaussians")

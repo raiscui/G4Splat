@@ -1,0 +1,95 @@
+# 面向 dense-view 的小体积 preset，目标是尽量压小最终 Gaussian ply 文件。
+# 主要控大小的参数：
+# - `max_init_gaussians`：限制初始高斯预算上限。
+# - `init_voxel_size`：值越大，初始高斯体素下采样越激进。
+# - `densify_until_iter`：值越小，后期新增高斯的时间越短。
+# - `densify_grad_threshold`：值越大，越不容易触发 densify。
+# - `opacity_cull`：值越大，低 opacity 高斯会被更积极地删掉。
+
+type: '2dgs'
+
+# dense-view refine 阶段的总训练步数。
+iterations: 7000
+
+# densify 调度：
+# 从第 500 步开始允许新增高斯，在第 2000 步后停止 densify。
+densify_from_iter: 500
+densify_until_iter: 2500
+
+# 每 200 步做一次 densify/prune。
+densification_interval: 100
+
+# 梯度阈值越高，可被 clone/split 的高斯越少。
+densify_grad_threshold: 0.0004
+
+# 定期重置 opacity，用来稳定后续的 prune 行为。
+opacity_reset_interval: 1000
+
+# opacity 剪枝阈值。值越高，弱高斯删得越狠。
+opacity_cull: 0.07
+
+# Gaussian trainer 内部用于区分 clone / split 的尺度阈值比例。
+percent_dense: 0.01
+
+# 几何与正则相关参数。
+depth_ratio: 0.5
+normal_consistency_from: 3500
+distortion_from: 1500
+
+# 开启 mip filter，通常会让训练与渲染更稳定。
+use_mip_filter: true
+
+# 允许在训练开始前先对初始高斯做下采样。
+use_downsample_gaussians: true
+
+# dense-view 阶段的初始高斯预算上限。
+max_init_gaussians: 2000000
+
+# 初始高斯下采样使用的体素大小。
+# 调大：最终 ply 往往更小。
+# 调小：保留更多细节，但高斯数和文件体积通常会上升。
+init_voxel_size: 0.009
+
+max_init_input_views: 25
+init_point_stride: 1
+
+# very low  don't remove !
+#
+# type: '2dgs'
+# iterations: 7000
+# densify_from_iter: 500
+# densify_until_iter: 1500
+# densification_interval: 200
+# densify_grad_threshold: 0.0005
+# opacity_reset_interval: 1000
+# opacity_cull: 0.08
+# percent_dense: 0.01
+# depth_ratio: 0.5
+# normal_consistency_from: 3500
+# distortion_from: 1500
+# use_mip_filter: true
+# use_downsample_gaussians: true
+# max_init_gaussians: 1200000
+# init_voxel_size: 0.01
+
+
+# 减弱训练阶段的几何约束。
+
+#   先试最简单的：
+
+#   --dense_regul weak
+
+#   如果还不行，甚至试：
+
+#   --dense_regul none
+
+#   另外配置里可以改得更温和：
+
+#   - depth_ratio: 0.5 -> 0.2
+#   - normal_consistency_from: 3500 -> 4500
+#   - distortion_from: 1500 -> 2500
+
+#   意思：
+
+#   - 少信 depth prior
+#   - 晚一点再加强法线/几何约束

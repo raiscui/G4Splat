@@ -14,6 +14,8 @@ VALID_IMAGE_EXTENSIONS = {
     ".webp",
 }
 
+DEFAULT_DENSE_VIEW_GROUP_SIZE = 12
+
 
 def parse_train_indices(train_arg):
     if train_arg is None:
@@ -70,20 +72,32 @@ def parse_positive_int(value, flag_name):
     return parsed
 
 
-def build_dense_view_indices(image_count, divisor, offset=1):
+def build_dense_view_indices(
+    image_count,
+    divisor,
+    offset=1,
+    group_size=DEFAULT_DENSE_VIEW_GROUP_SIZE,
+):
     if divisor is None:
         return None
 
     divisor = parse_positive_int(divisor, "--dense_view_divisor")
     offset = parse_positive_int(offset, "--dense_view_offset") - 1
+    group_size = parse_positive_int(group_size, "--dense_view_group_size")
     if offset >= divisor:
         raise ValueError("--dense_view_offset must be in [1, --dense_view_divisor].")
 
-    dense_view_indices = list(range(offset, image_count, divisor))
+    dense_view_indices = []
+    grouped_stride = divisor * group_size
+    grouped_start = offset * group_size
+    for block_start in range(grouped_start, image_count, grouped_stride):
+        block_end = min(block_start + group_size, image_count)
+        dense_view_indices.extend(range(block_start, block_end))
+
     if not dense_view_indices:
         raise ValueError(
             f"No dense-view indices generated for image_count={image_count}, "
-            f"divisor={divisor}, offset={offset + 1}."
+            f"divisor={divisor}, offset={offset + 1}, group_size={group_size}."
         )
 
     return dense_view_indices
@@ -93,7 +107,7 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Generate split-Nviews.json from a comma-separated training index list, "
-            "optionally also emitting dense_view.json from evenly sampled all-image subsets."
+            "optionally also emitting dense_view.json from grouped dense-view subsets."
         )
     )
     parser.add_argument(
@@ -123,8 +137,18 @@ def main():
         type=int,
         default=None,
         help=(
-            "Also emit dense_view.json using every Nth image from the full image set. "
-            "Use 2 / 3 / 4 for 1/2, 1/3, 1/4 sampling."
+            "Also emit dense_view.json by keeping one dense-view group out of every N "
+            "groups from the full image set. With the default 12-view interleaved "
+            "grouping, 2 keeps 0-11, drops 12-23, keeps 24-35, etc."
+        ),
+    )
+    parser.add_argument(
+        "--dense_view_group_size",
+        type=int,
+        default=DEFAULT_DENSE_VIEW_GROUP_SIZE,
+        help=(
+            "Number of interleaved images in one dense-view group. Default: 12. "
+            "Use 1 to recover the legacy per-image stride behavior."
         ),
     )
     parser.add_argument(
@@ -138,8 +162,9 @@ def main():
         type=int,
         default=1,
         help=(
-            "1-based phase for dense-view subsampling. 1 means indices 0,N,2N...; "
-            "2 means 1,1+N,1+2N..."
+            "1-based phase for grouped dense-view subsampling. With divisor=2 and the "
+            "default group size 12, offset 1 keeps 0-11,24-35... while offset 2 keeps "
+            "12-23,36-47..."
         ),
     )
     args = parser.parse_args()
@@ -180,6 +205,7 @@ def main():
         image_count,
         args.dense_view_divisor,
         args.dense_view_offset,
+        args.dense_view_group_size,
     )
     if dense_view_indices is not None:
         dense_view_output = args.dense_view_output
@@ -196,10 +222,11 @@ def main():
 
         divisor = args.dense_view_divisor
         offset = args.dense_view_offset
+        group_size = args.dense_view_group_size
         print(f"Saved dense-view file to: {dense_view_output}")
         print(
-            f"Dense-view sampling: every {divisor} image(s), "
-            f"offset {offset} -> {len(dense_view_indices)} views"
+            f"Dense-view sampling: keep 1 group every {divisor} group(s), "
+            f"group size {group_size}, offset {offset} -> {len(dense_view_indices)} views"
         )
 
 

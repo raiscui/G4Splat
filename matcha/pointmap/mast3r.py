@@ -214,8 +214,13 @@ def get_pointmap_with_mast3r(
     if n_images_in_pointmap is None:
         n_images_in_pointmap = n_total_images
     if image_indices is None:
-        image_indices = [i * (len(cameras['filepaths']) // (n_images_in_pointmap - 1)) for i in range(n_images_in_pointmap)]
+        if n_images_in_pointmap == 1:
+            image_indices = [0]
+        else:
+            step = max(1, len(cameras['filepaths']) // (n_images_in_pointmap - 1))
+            image_indices = [min(i * step, len(cameras['filepaths']) - 1) for i in range(n_images_in_pointmap)]
     else:
+        image_indices = [int(idx) for idx in image_indices]
         n_images_in_pointmap = len(image_indices)
         
     _img_paths = [cameras['filepaths'][i] for i in image_indices]
@@ -230,7 +235,13 @@ def get_pointmap_with_mast3r(
     # Load the pointmap files
     pointmaps_dir = os.path.join(mast3r_scene_source_path, 'pointmaps')
     all_pointmaps_files = sorted([os.path.join(pointmaps_dir, f) for f in os.listdir(pointmaps_dir) if f.endswith('.json')])
-    pointmaps_files = [all_pointmaps_files[i * (len(all_pointmaps_files) // (n_images_in_pointmap - 1))] for i in range(n_images_in_pointmap)]
+    if image_indices is not None:
+        pointmaps_files = [all_pointmaps_files[i] for i in image_indices]
+    elif n_images_in_pointmap == 1:
+        pointmaps_files = [all_pointmaps_files[0]]
+    else:
+        step = max(1, len(all_pointmaps_files) // (n_images_in_pointmap - 1))
+        pointmaps_files = [all_pointmaps_files[min(i * step, len(all_pointmaps_files) - 1)] for i in range(n_images_in_pointmap)]
     print(f"Loading {len(pointmaps_files)} pointmaps from {mast3r_scene_source_path}...")
     scene = {'rgb': [], 'points': [], 'confs': [],}
     for pointmap_file in pointmaps_files:

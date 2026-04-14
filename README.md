@@ -67,7 +67,7 @@ pixi run install-detectron2
 
 Notes:
 
-- `bootstrap` includes `xformers`, `segment-anything`, `pytorch3d`, the 2DGS CUDA
+- `bootstrap` includes `xformers`, `sam2`, `pytorch3d`, the 2DGS CUDA
   extensions, tetra-triangulation, and the MASt3R native extensions.
 - If you want even stricter CPU throttling during native builds, override `MAX_JOBS`
   or use `PYTORCH3D_RESERVED_CPUS`, `LOCAL_EXT_RESERVED_CPUS`, `XFORMERS_RESERVED_CPUS`,
@@ -95,7 +95,7 @@ pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https
 pip install -r requirements.txt
 
 pip install 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
-pip install 'git+https://github.com/facebookresearch/segment-anything.git'
+pip install --no-build-isolation --no-deps https://github.com/facebookresearch/sam2/archive/refs/heads/main.zip
 # Detectron2 (used only for visualization)
 pip install 'git+https://github.com/facebookresearch/detectron2.git'
 ```
@@ -154,12 +154,15 @@ wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge
 wget https://download.europe.naverlabs.com/ComputerVision/MASt3R/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric_retrieval_codebook.pkl -P ./mast3r/checkpoints/
 ```
 
-Then, download the SAM checkpoint:
+Then, download the SAM2 checkpoint:
 ```shell
-mkdir -p ./checkpoint/
-mkdir -p ./checkpoint/segment-anything/
-wget https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth -P ./checkpoint/segment-anything/
+mkdir -p ./checkpoint/sam2/
+wget https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt -P ./checkpoint/sam2/
 ```
+
+The plane-extraction stage defaults to the official SAM2.1 large config `configs/sam2.1/sam2.1_hiera_l.yaml` with checkpoint `./checkpoint/sam2/sam2.1_hiera_large.pt`.
+
+For interleaved multi-view COLMAP image sets, `plane_excavator.py` now de-interleaves the sampled frames into per-view temporal sequences before SAM2 video tracking; the main training wrappers pass `--num_views 12`, while `select-gs-planes` inputs continue to auto-detect as a single sequence.
 
 Finally, download the See3D checkpoint:
 ```shell

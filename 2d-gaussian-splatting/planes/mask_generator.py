@@ -1,293 +1,206 @@
-# Over-segmentation by selecting the smallest mask for each prompt. Adapted from SuperPrimitive at https://github.com/makezur/super_primitive
+from __future__ import annotations
 
+from contextlib import nullcontext
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, Sequence
+
+import numpy as np
 import torch
 
-from segment_anything import sam_model_registry, SamPredictor
-from segment_anything.utils.amg import calculate_stability_score, batched_mask_to_box, MaskData
-from torchvision.ops.boxes import batched_nms, box_area
+try:
+    from sam2.build_sam import build_sam2_video_predictor, build_sam2_video_predictor_hf
+except ImportError:  # pragma: no cover - handled at runtime for missing dependency
+    build_sam2_video_predictor = None
+    build_sam2_video_predictor_hf = None
 
-SAM_CONFIG = {
-    "select_smallest": True,
-    "nms": True,
-    "box_nms_thresh": 0.8,
-    "iou_threshold": 0.0,
-    "stability_threshold": 0.85,
-    "filter_edge_points": False,
-    "filter_by_box_size": False,
+
+SAM2_CONFIG = {
+    "checkpoint": "./checkpoint/sam2/sam2.1_hiera_large.pt",
+    "model_cfg": "configs/sam2.1/sam2.1_hiera_l.yaml",
+    "model_id": "facebook/sam2.1-hiera-large",
+    "coverage_threshold": 0.65,
+    "max_refine_passes": 2,
+    "offload_video_to_cpu": False,
+    "offload_state_to_cpu": False,
+    "async_loading_frames": False,
+    "vos_optimized": False,
 }
 
-def denormalise_coordinates(x_norm, dims):
-    dims = torch.as_tensor(dims, dtype=torch.float32, device=x_norm.device)
-    x_pixel = 0.5 * (dims - 1) * ((x_norm) + 1 )
-    return x_pixel.round().long()
 
-def normalise_coordinates(x_pixel, dims):
-    inv = 1.0 / (torch.as_tensor(dims, dtype=torch.float32, device=x_pixel.device) - 1)
+@dataclass
+class SAM2MaskGenerator:
+    predictor: object
+    device: str
+    coverage_threshold: float
+    max_refine_passes: int
+    offload_video_to_cpu: bool
+    offload_state_to_cpu: bool
+    async_loading_frames: bool
 
-    x_norm = 2 * x_pixel * inv - 1
-    return x_norm
+    def _inference_context(self):
+        autocast_context = (
+            torch.autocast("cuda", dtype=torch.bfloat16)
+            if str(self.device).startswith("cuda")
+            else nullcontext()
+        )
+        return torch.inference_mode(), autocast_context
+
+    def _init_state(self, video_path: str | Path):
+        video_path = str(video_path)
+        try:
+            return self.predictor.init_state(
+                video_path=video_path,
+                offload_video_to_cpu=self.offload_video_to_cpu,
+                offload_state_to_cpu=self.offload_state_to_cpu,
+                async_loading_frames=self.async_loading_frames,
+            )
+        except TypeError:
+            return self.predictor.init_state(video_path)
+
+    def _add_new_mask(self, state, frame_idx: int, obj_id: int, mask: np.ndarray):
+        mask = np.asarray(mask, dtype=np.uint8)
+        inference_mode, autocast_context = self._inference_context()
+        with inference_mode, autocast_context:
+            try:
+                return self.predictor.add_new_mask(
+                    inference_state=state,
+                    frame_idx=frame_idx,
+                    obj_id=obj_id,
+                    mask=mask,
+                )
+            except TypeError:
+                return self.predictor.add_new_mask(state, frame_idx, obj_id, mask)
+
+    def _propagate(self, state) -> dict[int, dict[int, np.ndarray]]:
+        tracked_masks: dict[int, dict[int, np.ndarray]] = {}
+        inference_mode, autocast_context = self._inference_context()
+        with inference_mode, autocast_context:
+            for frame_idx, object_ids, mask_logits in self.predictor.propagate_in_video(state):
+                mask_array = mask_logits.detach().float().cpu().numpy()
+                if mask_array.ndim == 4:
+                    mask_array = mask_array[:, 0]
+                elif mask_array.ndim == 2:
+                    mask_array = mask_array[None, ...]
+
+                frame_masks: dict[int, np.ndarray] = {}
+                for i, obj_id in enumerate(object_ids):
+                    frame_masks[int(obj_id)] = mask_array[i] > 0.0
+                tracked_masks[int(frame_idx)] = frame_masks
+        return tracked_masks
+
+    def track_sequence(
+        self,
+        sequence_dir: str | Path,
+        seed_masks_by_frame: Mapping[int, Sequence[np.ndarray]],
+    ) -> dict[int, dict[int, np.ndarray]]:
+        state = self._init_state(sequence_dir)
+        try:
+            next_obj_id = 1
+
+            for seed_mask in seed_masks_by_frame.get(0, []):
+                if np.asarray(seed_mask, dtype=bool).sum() == 0:
+                    continue
+                self._add_new_mask(state, frame_idx=0, obj_id=next_obj_id, mask=seed_mask)
+                next_obj_id += 1
+
+            tracked_masks = self._propagate(state) if next_obj_id > 1 else {}
+
+            for _ in range(self.max_refine_passes):
+                additions = 0
+                for frame_idx, candidate_masks in sorted(seed_masks_by_frame.items()):
+                    existing_masks = tracked_masks.get(frame_idx, {})
+                    for candidate_mask in candidate_masks:
+                        candidate_mask = np.asarray(candidate_mask, dtype=bool)
+                        candidate_area = int(candidate_mask.sum())
+                        if candidate_area == 0:
+                            continue
+
+                        best_coverage = 0.0
+                        for existing_mask in existing_masks.values():
+                            overlap = np.logical_and(existing_mask, candidate_mask).sum()
+                            best_coverage = max(best_coverage, overlap / max(candidate_area, 1))
+
+                        if best_coverage >= self.coverage_threshold:
+                            continue
+
+                        self._add_new_mask(state, frame_idx=frame_idx, obj_id=next_obj_id, mask=candidate_mask)
+                        next_obj_id += 1
+                        additions += 1
+
+                if additions == 0:
+                    break
+                tracked_masks = self._propagate(state)
+
+            return tracked_masks
+        finally:
+            if hasattr(self.predictor, 'reset_state'):
+                self.predictor.reset_state(state)
+
+
 
 def setup_sam(
-    sam_checkpoint="./checkpoint/segment-anything/sam_vit_h_4b8939.pth", 
-    model_type = "vit_h", device="cuda"
+    sam_checkpoint: str = SAM2_CONFIG["checkpoint"],
+    model_cfg: str = SAM2_CONFIG["model_cfg"],
+    model_id: str = SAM2_CONFIG["model_id"],
+    sam2_checkpoint_path: str | None = None,
+    sam2_config: str | None = None,
+    sam2_model_id: str | None = None,
+    device: str = "cuda",
+    coverage_threshold: float = SAM2_CONFIG["coverage_threshold"],
+    max_refine_passes: int = SAM2_CONFIG["max_refine_passes"],
+    offload_video_to_cpu: bool = SAM2_CONFIG["offload_video_to_cpu"],
+    offload_state_to_cpu: bool = SAM2_CONFIG["offload_state_to_cpu"],
+    async_loading_frames: bool = SAM2_CONFIG["async_loading_frames"],
+    vos_optimized: bool = SAM2_CONFIG["vos_optimized"],
 ):
-
-    print(f"loading SAM/'{model_type}' checkpoint from: {sam_checkpoint}")
-
-    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-    sam.to(device=device)
-
-    predictor = SamPredictor(sam)
-
-    return predictor
-
-def infer_sam_masks_batch(model_sam, image, points, logits=True):
-    # points is same form as keypoints, [N, 2]
-    # in the range [-1, 1]
-    device = points.device
-    num_pts = points.shape[0]
-
-    model_sam.set_image(image)
-
-    H, W, _ = image.shape
-
-    H_sam, W_sam = model_sam.transform.get_preprocess_shape(H, W, model_sam.transform.target_length)
-
-    points_sam_format = denormalise_coordinates(points, (H_sam, W_sam))
-    points_sam_format = points_sam_format.flip(-1)
-
-    # sam ids for postive / negative ponits. here we use one postive per segment
-    dummy_ids = torch.ones((num_pts, 1), dtype=torch.int64, device=device)
-
-    masks, iou_predictions, lowres =  model_sam.predict_torch(points_sam_format[:, None], dummy_ids, multimask_output=True, return_logits=logits)
-
-    return {'masks': masks,
-            'iou_pred': iou_predictions,
-            'lowres': lowres}
-
-def smallest_good_mask_batch(masks, iou_pred, iou_threshold=0.88, stability_score_thresh=0.95, select_smallest=True):
-    # masks is [N, 3, H, W]
-    # iou_predictions is [N, 3]
-
-    def filter_per_keypoint(candidate_scores):
-        if select_smallest:
-            return (candidate_scores).sum(dim=1, dtype=torch.int16) > 0
-        else:
-            return candidate_scores
-
-    stability_score_offset = 1.0
-    model_mask_thresh = 0.0
-
-    if select_smallest:
-        data = MaskData(masks=masks, iou_preds=iou_pred,
-                        keypoints_ids=torch.arange(masks.shape[0], device=masks.device),
-                        good_masks=torch.ones((masks.shape[0], 3), dtype=torch.bool, device=masks.device))
-    else:
-        data = MaskData(masks=masks.flatten(0, 1),
-                        iou_preds=iou_pred.flatten(0, 1),
-                        keypoints_ids=torch.arange(masks.shape[0], device=masks.device).repeat_interleave(3))
-        del masks
-    # threshold for per-pixel mask logits
-
-    if iou_threshold > 0:
-        good_masks = data['iou_preds'] > iou_threshold
-        # same trick as in the SAM code to prevent casting to int64
-        good_keypoints = filter_per_keypoint(good_masks)
-
-        # filtered
-        if 'good_masks' in  data._stats.keys():
-            data['good_masks'] = torch.logical_and(data['good_masks'], good_masks)
-
-        data.filter(good_keypoints)
-
-    if stability_score_thresh > 0:
-        # here asssume that masks haven't been sigmoided yet
-        mask_stability_scores = calculate_stability_score(data['masks'],
-                                                          model_mask_thresh,
-                                                          stability_score_offset)
-        good_masks = mask_stability_scores >= stability_score_thresh
-        good_keypoints = filter_per_keypoint(good_masks)
-
-        # filtered
-        if 'good_masks' in data._stats.keys():
-            data['good_masks'] = torch.logical_and(data['good_masks'], good_masks)
-
-        data.filter(good_keypoints)
-
-    # binariase masks
-    data['masks'] = data['masks'] > model_mask_thresh
-
-    # same trick to save up memory
-    if select_smallest:
-        masks_sizes = data['masks'].sum(dim=-1, dtype=torch.int16).sum(dim=-1, dtype=torch.int32)
-        # now we want to to select the smallest good mask per keypoint
-        masks_sizes[~data['good_masks']] = 1e6
-
-        smallest_mask_id = masks_sizes.argmin(dim=1)
-        smallest_mask = data['masks'][torch.arange(data['masks'].shape[0]),
-                                    smallest_mask_id, ...]
-        smallest_ious = data['iou_preds'][torch.arange(data['masks'].shape[0]),
-                                        smallest_mask_id, ...]
-
-
-
-        result = {'masks': smallest_mask,
-                  'iou_preds': smallest_ious,
-                  'keypoints_ids': data['keypoints_ids'],
-                  'masks_ids': smallest_mask_id}
-    else:
-        result = {'masks': data['masks'],
-                  'iou_preds': data['iou_preds'],
-                  'keypoints_ids': data['keypoints_ids']}
-
-    del data
-    result['boxes'] = batched_mask_to_box(result['masks'])
-
-    return result
-
-
-def active_sample_pos(coverage_mask, num_samples=100, fine_noise=True):
-    # mask coverage is [B, H, W]
-    B, H, W = coverage_mask.shape
-    with torch.no_grad():
-        downsample_factor = 16
-        coverage_mask = coverage_mask.clone()
-        # replace lower few rows with 1 to compensate for SAM artifacts
-        coverage_mask[:, -2:, :] = 1
-        coarse_coverage = torch.nn.functional.avg_pool2d(coverage_mask.float()[:, None],
-                                                        downsample_factor,
-                                                        stride=downsample_factor)
-    H_coarse, W_coarse = coarse_coverage.shape[2:]
-    sample_density = 1.0 - coarse_coverage
-    sample_density = sample_density / (sample_density.sum(dim=(2, 3), keepdim=True) + 1e-6)
-
-    distribution = torch.distributions.Categorical(probs=sample_density.view(B, -1))
-
-    sample_indices = distribution.sample((num_samples,)).view(num_samples, B)
-    # convert flattened C-style index onto 2D grid index
-    sample_indices = torch.stack([sample_indices // W_coarse, sample_indices % W_coarse], dim=2)
-    sample_indices = sample_indices.permute(1, 0, 2)
-
-    # now generate samples in the fine grid
-    sample_indices = sample_indices.reshape(B, num_samples, 2)
-    coarse_indices = sample_indices
-    normalised_coarse = normalise_coordinates(sample_indices, (H_coarse, W_coarse))
-    # assume ratio H / coarse_H = W / coarse_W
-    if fine_noise:
-        per_quadrant_noise = normalise_coordinates((torch.randint_like(normalised_coarse,
-                                                                                #    low=-downsample_factor // 2 + 1,
-                                                                                   high=downsample_factor // 2, device=coverage_mask.device)), (H, W)) + 1
-        normalised_coarse = normalised_coarse + per_quadrant_noise
-        normalised_coarse = normalised_coarse.clamp(-1, 1)
-    sample_indices = denormalise_coordinates(normalised_coarse, (H, W))
-    sample_indices = sample_indices.reshape(B, num_samples, 2)
-    normalised_coarse = normalised_coarse.reshape(B, num_samples, 2)
-
-    result = {'coarse_density': sample_density,
-              'coarse_indices': coarse_indices,
-              'sample_indices': sample_indices,
-              'normalised_coords': normalised_coarse}
-    return result
-
-
-def infer_masks(sam_model, image,
-                keypoints=None,
-                num_pts=300, num_pts_active=50,
-                device=torch.device('cuda:0')):
-    H, W, _ = image.shape
-
-    if keypoints is None:
-        keypoints = (torch.rand(num_pts, 2, device=device) * 2 - 1)
-
-    select_smallest = SAM_CONFIG['select_smallest']
-    nms = SAM_CONFIG['nms']
-    box_nms_thresh = SAM_CONFIG['box_nms_thresh']
-    iou_threshold = SAM_CONFIG['iou_threshold']
-    stability_score_thresh = SAM_CONFIG['stability_threshold']
-    filter_edge_keypoints = SAM_CONFIG['filter_edge_points']
-    filter_by_box_size = SAM_CONFIG['filter_by_box_size']
-
-
-    masks = infer_sam_masks_batch(sam_model, image, keypoints)
-    masks = smallest_good_mask_batch(masks['masks'], masks['iou_pred'], iou_threshold=iou_threshold, stability_score_thresh=stability_score_thresh, select_smallest=select_smallest)
-    masks = MaskData(**masks)
-
-    keypoints_filtered = keypoints[masks['keypoints_ids'], ...]
-
-    if nms:
-        # prefer smaller boxes
-        scores_boxes = 1 / box_area(masks["boxes"])
-
-        keep_by_nms = batched_nms(
-            masks['boxes'].float(),
-            scores_boxes if filter_by_box_size else masks['iou_preds'],
-            torch.zeros_like(masks["boxes"][:, 0]),  # categories
-            iou_threshold=box_nms_thresh,
+    if build_sam2_video_predictor is None or build_sam2_video_predictor_hf is None:
+        raise ImportError(
+            "sam2 is not installed. Install it before running plane_excavator with the SAM2 backend."
         )
-        masks.filter(keep_by_nms)
-        keypoints_filtered = keypoints_filtered[keep_by_nms, ...]
 
-    coverage_mask = masks['masks'].any(dim=0)
-    sampled_masks = None
+    if sam2_checkpoint_path is not None:
+        sam_checkpoint = sam2_checkpoint_path
+    if sam2_config is not None:
+        model_cfg = sam2_config
+    if sam2_model_id is not None:
+        model_id = sam2_model_id
 
-    if num_pts_active > 0:
-        # coverage_mask = masks['masks'].any(dim=0)
-        sampled_masks  = active_sample_pos(coverage_mask[None], num_samples=num_pts_active)
-        keypoints_active = sampled_masks['normalised_coords'][0]
+    checkpoint_path = Path(sam_checkpoint)
+    predictor = None
 
-        src_masks_add =  infer_sam_masks_batch(sam_model, image, keypoints_active)
-        src_masks_add = smallest_good_mask_batch(src_masks_add['masks'], src_masks_add['iou_pred'], iou_threshold=iou_threshold, stability_score_thresh=stability_score_thresh, select_smallest=select_smallest)
-        keypoints_active_filtered = keypoints_active[src_masks_add['keypoints_ids'], ...]
-        num_added = keypoints_active_filtered.shape[0]
-
-        src_masks_add = MaskData(**src_masks_add)
-
-        if nms:
-            add_scores_boxes = 1 / box_area(src_masks_add["boxes"])
-
-            keep_by_nms = batched_nms(
-                src_masks_add['boxes'].float(),
-                add_scores_boxes if filter_by_box_size else src_masks_add['iou_preds'],
-                torch.zeros_like(src_masks_add ["boxes"][:, 0]),  # categories
-                iou_threshold=box_nms_thresh,
+    if checkpoint_path.exists():
+        print(f"loading SAM2 checkpoint from: {checkpoint_path}")
+        try:
+            try:
+                predictor = build_sam2_video_predictor(
+                    model_cfg,
+                    str(checkpoint_path),
+                    device=device,
+                    vos_optimized=vos_optimized,
+                )
+            except TypeError:
+                predictor = build_sam2_video_predictor(model_cfg, str(checkpoint_path), device=device)
+        except Exception as exc:
+            print(
+                f"Failed to initialize SAM2 from local checkpoint {checkpoint_path}: {exc}. "
+                f"Falling back to Hugging Face model: {model_id}"
             )
-            src_masks_add.filter(keep_by_nms)
-            keypoints_active_filtered = keypoints_active_filtered[keep_by_nms, ...]
-            num_added = keypoints_active_filtered.shape[0]
+            predictor = None
 
-        keypoints_final = torch.cat([keypoints_filtered, keypoints_active_filtered], dim=0)
-        masks.cat(src_masks_add)
+    if predictor is None:
+        if not checkpoint_path.exists():
+            print(
+                f"SAM2 checkpoint not found at {checkpoint_path}. Falling back to Hugging Face model: {model_id}"
+            )
+        predictor = build_sam2_video_predictor_hf(model_id=model_id, device=device, vos_optimized=vos_optimized)
 
-    else:
-        num_added = 0
-        keypoints_final = keypoints_filtered
-
-    if masks['masks'].shape[0] == 0:
-        return {'masks': {'masks': torch.tensor([])}}
-
-
-    if filter_edge_keypoints:
-        # masks is of shape (N, H, W)
-        # keypoints_final is of shape (N, 2)
-
-        keypoints_denorm = denormalise_coordinates(keypoints_final, (H, W))
-        keypoints_denorm = keypoints_denorm.long()
-        mask_value_at_keypoints = masks['masks'][torch.arange(masks['masks'].shape[0], device=masks['masks'].device),
-                                                 keypoints_denorm[:, 0],
-                                                 keypoints_denorm[:, 1]]
-
-        masks.filter(mask_value_at_keypoints)
-        keypoints_final = keypoints_final[mask_value_at_keypoints, ...]
-
-
-    final_coverage = masks['masks'].any(dim=0)
-
-    result = {'masks': masks._stats,
-              'keypoints': keypoints_final,
-              'num_active': num_added,
-              'coarse_coverage': coverage_mask,
-              'final_coverage': final_coverage,
-              'sampled_masks': sampled_masks,
-              }
-
-    return result
+    return SAM2MaskGenerator(
+        predictor=predictor,
+        device=device,
+        coverage_threshold=coverage_threshold,
+        max_refine_passes=max_refine_passes,
+        offload_video_to_cpu=offload_video_to_cpu,
+        offload_state_to_cpu=offload_state_to_cpu,
+        async_loading_frames=async_loading_frames,
+    )

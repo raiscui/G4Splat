@@ -1,0 +1,48 @@
+# 面向 dense-view 的细节保留 preset。
+# 目标：
+# - 不主动压缩最终 ply 体积
+# - 给初始化更多高斯预算
+# - 让 densify 持续更久
+# - 降低 prune 激进程度
+# - 适度放松几何约束，减少“表面被抹平”
+
+type: '2dgs'
+
+# 与 compact 系列保持同一轮次量级，方便横向比较。
+iterations: 7000
+
+# 更长的 densify 窗口，给细节区域更多 clone/split 机会。
+densify_from_iter: 500
+densify_until_iter: 3000
+
+# 保持常规 densify 节奏。
+densification_interval: 100
+
+# 比 default(0.0002) 更容易触发 densify。
+densify_grad_threshold: 0.00025
+
+opacity_reset_interval: 1000
+
+# 比 compact 系列更低，减少对弱但有用高斯的过早清理。
+opacity_cull: 0.06
+
+percent_dense: 0.01
+
+# 适度减弱几何先验，避免细节被 prior/plane 约束抹平。
+depth_ratio: 0.55
+normal_consistency_from: 3500
+distortion_from: 2000
+
+use_mip_filter: true
+
+# 不主动开启初始化下采样；只有当初始高斯数超过预算时才会被动压缩。
+# use_downsample_gaussians: true
+
+# 给初始化更高的高斯预算；如果原始数量低于这个值，就不会因为预算被压缩。
+max_init_gaussians: 2500000
+
+# 即使触发被动下采样，也用更小体素，尽量保细节。
+init_voxel_size: 0.007
+
+max_init_input_views: 25
+init_point_stride: 1

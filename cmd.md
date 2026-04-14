@@ -15,34 +15,27 @@ CUDA_VISIBLE_DEVICES=1 python train.py \
 ```bash
 
 pixi run python scripts/generate_view_split.py \
-  -s /autodl-fs/data/fastgs/dm7_sr \
+  -s /autodl-fs/data/fastgs/nt7_sr \
   -train 0,168,169,170,171,172,173,174,175,176,177,178,179,312,313,314,315,316,317,318,319,320,321,322,323 \
   --dense_view_divisor 2 \
-  --dense_view_output /autodl-fs/data/fastgs/dm7_sr/dense_view.json
+  --dense_view_output /autodl-fs/data/fastgs/nt7_sr/dense_view.json
+
+# 12 视角交错序列时，--dense_view_divisor 2 表示保留 0-11，丢 12-23，再保留 24-35 这种整组抽样。
 
 pixi run python scripts/generate_view_split.py \
--s /autodl-fs/data/fastgs/nt4_sr \
--train 0,168,169,170,171,172,173,174,175,176,177,178,179,312,313,314,315,316,317,318,319,320,321,322,323
-
+  -s /autodl-fs/data/fastgs/dm1_sr \
+  -train 0,168,169,170,171,172,173,174,175,176,177,178,179,312,313,314,315,316,317,318,319,320,321,322,323 \
+  --dense_view_divisor 2 \
+  --dense_view_output /autodl-fs/data/fastgs/dm1_sr/dense_view.json
 
 ```
-
+  --depth_model geometrycrafter \
+  --geometry_prior_mode hybrid-override-at-align-prep
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
--s /autodl-fs/data/fastgs/dm7_sr \
--o /autodl-fs/data/g4/dm7_sr \
---sfm_config posed \
---use_view_config \
---config_view_num 25 \
---tetra_downsample_ratio 0.25 \
---use_dense_view \
---free_gaussians_config dense_compact_sm
-
-
-CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
--s /autodl-fs/data/fastgs/nt4_sr \
--o /autodl-fs/data/g4/nt4_sr \
+CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
+-s /autodl-fs/data/fastgs/nt1_sr \
+-o data/g4/nt1_sr_sm9 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -50,8 +43,40 @@ CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 --use_dense_view \
 --resolution 2 \
 --merge_device cuda \
---merge_resolution_scale 2 \
---free_gaussians_config dense_compact_sm
+--merge_resolution_scale 1 \
+--depth_model geometrycrafter \
+--geometry_prior_mode hybrid-override-at-align-prep \
+--checkpoint_iterations 18000 \
+--free_gaussians_config dense_compact_sm1_d   --dense_regul weak
+
+
+
+CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
+-s /autodl-fs/data/fastgs/nt6_sr \
+-o data/g4/nt6_sr_sm9 \
+--sfm_config posed \
+--use_view_config \
+--config_view_num 25 \
+--tetra_downsample_ratio 0.25 \
+--use_dense_view \
+--resolution 2 \
+--merge_device cuda \
+--merge_resolution_scale 1 \
+--depth_model geometrycrafter \
+--geometry_prior_mode hybrid-override-at-align-prep \
+--free_gaussians_config dense_compact_sm9   --dense_regul weak
+
+
+
+
+
+CUDA_VISIBLE_DEVICES=1 scripts/continue_dense_view_stage.sh \
+    data/g4/nt3_sr/mast3r_sfm \
+    data/g4/nt3_sr/free_gaussians \
+    --config dense_compact_sm2 \
+    --resolution 1 \
+    --merge-resolution-scale 2 \
+    --merge-device cuda
 
 
 ```

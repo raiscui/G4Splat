@@ -19,7 +19,7 @@ from simple_knn._C import distCUDA2  # noqa: F401
 from tetranerf.utils.extension import cpp  # noqa: F401
 import pytorch3d  # noqa: F401
 from pytorch3d.ops import knn_points  # noqa: F401
-import segment_anything  # noqa: F401
+import sam2  # noqa: F401
 import asmk  # noqa: F401
 import asmk.hamming  # noqa: F401
 import curope  # noqa: F401

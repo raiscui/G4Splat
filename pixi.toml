@@ -63,12 +63,12 @@ pillow = "==10.2.0"
 
 [tasks]
 install-xformers = "bash ./scripts/install_xformers.sh"
-install-segment-anything = "bash ./scripts/install_segment_anything.sh"
+install-sam2 = "bash ./scripts/install_sam2.sh"
 install-pytorch3d = "bash ./scripts/install_pytorch3d.sh"
 install-local-extensions = "bash ./scripts/install_local_extensions.sh"
 install-detectron2 = "bash ./scripts/install_detectron2.sh"
 verify-env = "bash ./scripts/verify_env.sh"
 
 # detectron2 在上游 README 中只用于可视化，默认不阻塞核心训练环境。
-bootstrap = { depends-on = ["install-xformers", "install-segment-anything", "install-pytorch3d", "install-local-extensions"] }
+bootstrap = { depends-on = ["install-xformers", "install-sam2", "install-pytorch3d", "install-local-extensions"] }
 bootstrap-all = { depends-on = ["bootstrap", "install-detectron2"] }

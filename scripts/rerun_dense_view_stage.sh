@@ -157,7 +157,8 @@ run_cmd pixi run python 2d-gaussian-splatting/guidance/dense_dn_util.py \
   --iteration "$ITERATION"
 
 run_cmd pixi run python 2d-gaussian-splatting/planes/plane_excavator.py \
-  --plane_root_path "${MASTR3_SCENE}/plane-refine-depths"
+  --plane_root_path "${MASTR3_SCENE}/plane-refine-depths" \
+  --num_views 12
 
 run_cmd pixi run python scripts/plane_refine_depth.py \
   --source_path "$MASTR3_SCENE" \

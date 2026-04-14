@@ -15,6 +15,16 @@ def run_command_safe(command):
     else:
         print("Command succeeded!")
 
+
+def append_optional_arg(command_parts, flag, value):
+    if value is None:
+        return
+    if isinstance(value, bool):
+        if value:
+            command_parts.append(flag)
+        return
+    command_parts.extend([flag, str(value)])
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
@@ -49,8 +59,37 @@ if __name__ == '__main__':
     # Chart alignment config
     parser.add_argument('--alignment_config', type=str, default='default', help='Config for charts alignment')
     parser.add_argument('--depth_model', type=str, default="depthanythingv2")
+    parser.add_argument(
+        '--geometry_prior_mode',
+        choices=['baseline', 'sidecar-only', 'hybrid-override-at-align-prep'],
+        default='baseline',
+        help='Stage-1 geometry prior experiment mode for align_charts.',
+    )
     parser.add_argument('--depthanythingv2_checkpoint_dir', type=str, default='./Depth-Anything-V2/checkpoints/')
     parser.add_argument('--depthanything_encoder', type=str, default='vitl')
+    parser.add_argument('--geometrycrafter_repo', type=str, default='/home/rais/GeometryCrafter')
+    parser.add_argument('--geometrycrafter_cache_root', type=str, default=None)
+    parser.add_argument('--geometrycrafter_num_views', type=int, default=12)
+    parser.add_argument('--geometrycrafter_view_order', type=str, default='0,1,10,11,2,3,4,5,6,7,8,9')
+    parser.add_argument('--geometrycrafter_model_type', type=str, default='diff', choices=['diff', 'determ'])
+    parser.add_argument('--geometrycrafter_height', type=int, default=None)
+    parser.add_argument('--geometrycrafter_width', type=int, default=None)
+    parser.add_argument('--geometrycrafter_downsample_ratio', type=float, default=1.0)
+    parser.add_argument('--geometrycrafter_num_inference_steps', type=int, default=5)
+    parser.add_argument('--geometrycrafter_guidance_scale', type=float, default=1.0)
+    parser.add_argument('--geometrycrafter_window_size', type=int, default=110)
+    parser.add_argument('--geometrycrafter_decode_chunk_size', type=int, default=8)
+    parser.add_argument('--geometrycrafter_overlap', type=int, default=25)
+    parser.add_argument('--geometrycrafter_process_length', type=int, default=-1)
+    parser.add_argument('--geometrycrafter_process_stride', type=int, default=1)
+    parser.add_argument('--geometrycrafter_seed', type=int, default=42)
+    parser.add_argument('--geometrycrafter_force_projection', action='store_true', default=True)
+    parser.add_argument('--geometrycrafter_no_force_projection', action='store_false', dest='geometrycrafter_force_projection')
+    parser.add_argument('--geometrycrafter_force_fixed_focal', action='store_true', default=True)
+    parser.add_argument('--geometrycrafter_no_force_fixed_focal', action='store_false', dest='geometrycrafter_force_fixed_focal')
+    parser.add_argument('--geometrycrafter_use_extract_interp', action='store_true')
+    parser.add_argument('--geometrycrafter_track_time', action='store_true')
+    parser.add_argument('--geometrycrafter_low_memory_usage', action='store_true')
     
     # Free Gaussians config
     parser.add_argument('--free_gaussians_config', type=str, default=None, 
@@ -82,6 +121,9 @@ if __name__ == '__main__':
     parser.add_argument('--use_downsample_gaussians', action='store_true', help='Use downsample gaussians for training')
     parser.add_argument('--use_mesh_filter', action='store_true', help='Use mesh filter')
     parser.add_argument('--use_dense_view', action='store_true', help='Use dense view for training')                    # Add an additional input stage to extend plane-aware depth estimation across all input views
+    parser.add_argument('--checkpoint_iterations', type=int, nargs='*', default=None,
+        help='Checkpoint iteration list forwarded to free-gaussians refinement training.'
+    )
     args = parser.parse_args()
     
     # Set output paths
@@ -149,31 +191,62 @@ if __name__ == '__main__':
         "--randomize_images" if args.randomize_images else "",
     ])
     
-    align_charts_command = " ".join([
+    align_charts_command_parts = [
         "python", "scripts/align_charts.py",
         "--source_path", mast3r_scene_path,
         "--mast3r_scene", mast3r_scene_path,
         "--output_path", aligned_charts_path,
         "--config", args.alignment_config,
         "--depth_model", args.depth_model,
+        "--geometry_prior_mode", args.geometry_prior_mode,
         "--depthanythingv2_checkpoint_dir", args.depthanythingv2_checkpoint_dir,
         "--depthanything_encoder", args.depthanything_encoder,
-    ])
+        "--geometrycrafter_repo", args.geometrycrafter_repo,
+        "--geometrycrafter_num_views", str(args.geometrycrafter_num_views),
+        "--geometrycrafter_view_order", args.geometrycrafter_view_order,
+        "--geometrycrafter_model_type", args.geometrycrafter_model_type,
+        "--geometrycrafter_downsample_ratio", str(args.geometrycrafter_downsample_ratio),
+        "--geometrycrafter_num_inference_steps", str(args.geometrycrafter_num_inference_steps),
+        "--geometrycrafter_guidance_scale", str(args.geometrycrafter_guidance_scale),
+        "--geometrycrafter_window_size", str(args.geometrycrafter_window_size),
+        "--geometrycrafter_decode_chunk_size", str(args.geometrycrafter_decode_chunk_size),
+        "--geometrycrafter_overlap", str(args.geometrycrafter_overlap),
+        "--geometrycrafter_process_length", str(args.geometrycrafter_process_length),
+        "--geometrycrafter_process_stride", str(args.geometrycrafter_process_stride),
+        "--geometrycrafter_seed", str(args.geometrycrafter_seed),
+        "--geometrycrafter_force_projection" if args.geometrycrafter_force_projection else "--geometrycrafter_no_force_projection",
+        "--geometrycrafter_force_fixed_focal" if args.geometrycrafter_force_fixed_focal else "--geometrycrafter_no_force_fixed_focal",
+    ]
+    append_optional_arg(align_charts_command_parts, "--geometrycrafter_cache_root", args.geometrycrafter_cache_root)
+    append_optional_arg(align_charts_command_parts, "--geometrycrafter_height", args.geometrycrafter_height)
+    append_optional_arg(align_charts_command_parts, "--geometrycrafter_width", args.geometrycrafter_width)
+    append_optional_arg(align_charts_command_parts, "--geometrycrafter_use_extract_interp", args.geometrycrafter_use_extract_interp)
+    append_optional_arg(align_charts_command_parts, "--geometrycrafter_track_time", args.geometrycrafter_track_time)
+    append_optional_arg(align_charts_command_parts, "--geometrycrafter_low_memory_usage", args.geometrycrafter_low_memory_usage)
+    align_charts_command = " ".join(align_charts_command_parts)
     
     # NOTE: hard code plane-refine-depths path
     plane_root_path = os.path.join(mast3r_scene_path, 'plane-refine-depths')
 
-    refine_free_gaussians_command = " ".join([
+    refine_free_gaussians_command_parts = [
         "python", "scripts/refine_free_gaussians.py",
         "--mast3r_scene", mast3r_scene_path,
         "--output_path", free_gaussians_path,
         "--config", args.free_gaussians_config,
         "--resolution", str(args.resolution),
-        dense_arg,
         "--dense_regul", args.dense_regul,
         "--refine_depth_path", plane_root_path,
-        "--use_downsample_gaussians" if args.use_downsample_gaussians else "",
-    ])
+    ]
+    if dense_arg:
+        refine_free_gaussians_command_parts.append(dense_arg)
+    if args.use_downsample_gaussians:
+        refine_free_gaussians_command_parts.append("--use_downsample_gaussians")
+    if args.checkpoint_iterations:
+        refine_free_gaussians_command_parts.extend([
+            "--checkpoint_iterations",
+            *[str(iteration) for iteration in args.checkpoint_iterations],
+        ])
+    refine_free_gaussians_command = " ".join(refine_free_gaussians_command_parts)
 
     render_all_img_command = " ".join([
         "python", "2d-gaussian-splatting/render_multires.py",
@@ -234,6 +307,7 @@ if __name__ == '__main__':
     generate_2Dplane_command = " ".join([
         "python", "2d-gaussian-splatting/planes/plane_excavator.py",
         "--plane_root_path", plane_root_path,
+        "--num_views", "12",
     ])
 
     pnts_path = os.path.join(mast3r_scene_path, 'chart_pcd.ply')

@@ -608,19 +608,18 @@ def get_pointmap_from_sfm_data_with_depthanything(
     
     if image_indices is None and n_images_in_pointmap is None:
         raise ValueError("Either image_indices or n_images_in_pointmap must be provided.")
+    selected_global_indices = None
     if image_indices is not None:
-        n_total_images = len(image_indices)
-        n_images_in_pointmap = len(image_indices)
-        frame_interval = 1
+        selected_global_indices = [int(idx) for idx in image_indices]
+        n_images_in_pointmap = len(selected_global_indices)
+        camera_indices = list(range(n_images_in_pointmap))
     else:
         n_total_images = len(pointmap_cameras)
-        frame_interval = n_total_images // (n_images_in_pointmap - 1)
-        
-        image_indices = [_k * frame_interval for _k in range(n_images_in_pointmap)]
-        n_images_in_pointmap = len(image_indices)
-        
-        n_total_images = len(image_indices)
-        frame_interval = 1
+        if n_images_in_pointmap == 1:
+            camera_indices = [0]
+        else:
+            frame_interval = max(1, n_total_images // (n_images_in_pointmap - 1))
+            camera_indices = [min(_k * frame_interval, n_total_images - 1) for _k in range(n_images_in_pointmap)]
         
     # Build dictionary for PointMap
     img_paths = []        
@@ -632,7 +631,7 @@ def get_pointmap_from_sfm_data_with_depthanything(
     confidence = []
     masks = []
     
-    for cam_idx in image_indices:
+    for cam_idx in camera_indices:
         print(f"Processing frame {cam_idx}...")
         
         # Image path
