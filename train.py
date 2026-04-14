@@ -72,8 +72,18 @@ if __name__ == '__main__':
     parser.add_argument('--geometrycrafter_num_views', type=int, default=12)
     parser.add_argument('--geometrycrafter_view_order', type=str, default='0,1,10,11,2,3,4,5,6,7,8,9')
     parser.add_argument('--geometrycrafter_model_type', type=str, default='diff', choices=['diff', 'determ'])
-    parser.add_argument('--geometrycrafter_height', type=int, default=None)
-    parser.add_argument('--geometrycrafter_width', type=int, default=None)
+    parser.add_argument(
+        '--geometrycrafter_height',
+        type=int,
+        default=576,
+        help='GeometryCrafter processing height. Defaults to the recommended 576.',
+    )
+    parser.add_argument(
+        '--geometrycrafter_width',
+        type=int,
+        default=1024,
+        help='GeometryCrafter processing width. Defaults to the recommended 1024.',
+    )
     parser.add_argument('--geometrycrafter_downsample_ratio', type=float, default=1.0)
     parser.add_argument('--geometrycrafter_num_inference_steps', type=int, default=5)
     parser.add_argument('--geometrycrafter_guidance_scale', type=float, default=1.0)

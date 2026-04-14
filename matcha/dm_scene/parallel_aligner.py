@@ -1,6 +1,7 @@
 from typing import List
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.nn.functional import normalize as torch_normalize
 import open3d as o3d
 
@@ -21,6 +22,17 @@ from matcha.dm_utils.rendering import(
 from matcha.pointmap.depthanythingv2 import get_points_depth_in_depthmap
 from matcha.pointmap.mast3r import get_minimal_projections_diffs
 from tqdm import tqdm
+
+
+def _resize_maps_for_matching(depth_maps: torch.Tensor, target_shape: tuple[int, int]) -> torch.Tensor:
+    if tuple(depth_maps.shape[-2:]) == tuple(target_shape):
+        return depth_maps
+    return F.interpolate(
+        depth_maps[:, None],
+        size=target_shape,
+        mode='bilinear',
+        align_corners=False,
+    )[:, 0]
 
 
 # ----- ParallelAligner parameters -----

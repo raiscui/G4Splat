@@ -9,18 +9,18 @@
 type: '2dgs'
 
 # dense-view refine 阶段的总训练步数。
-iterations: 18000
+iterations: 14000
 
 # densify 调度：
 # 从第 500 步开始允许新增高斯，在第 2000 步后停止 densify。
 densify_from_iter: 500
-densify_until_iter: 8500
+densify_until_iter: 6500
 
 # 每 200 步做一次 densify/prune。
-densification_interval: 100
+densification_interval: 150
 
 # 梯度阈值越高，可被 clone/split 的高斯越少。
-densify_grad_threshold: 0.00028
+densify_grad_threshold: 0.0003
 
 # 定期重置 opacity，用来稳定后续的 prune 行为。
 opacity_reset_interval: 800
@@ -32,9 +32,9 @@ opacity_cull: 0.04
 percent_dense: 0.01
 
 # 几何与正则相关参数。
-depth_ratio: 0.35
-normal_consistency_from: 5500
-distortion_from: 3500
+depth_ratio: 0.55
+normal_consistency_from: 5000
+distortion_from: 2500
 
 # 开启 mip filter，通常会让训练与渲染更稳定。
 use_mip_filter: true
@@ -48,7 +48,7 @@ max_init_gaussians: 1800000
 # 初始高斯下采样使用的体素大小。
 # 调大：最终 ply 往往更小。
 # 调小：保留更多细节，但高斯数和文件体积通常会上升。
-init_voxel_size: 0.006
+init_voxel_size: 0.005
 
 max_init_input_views: 25
 init_point_stride: 1

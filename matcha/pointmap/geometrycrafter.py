@@ -588,6 +588,24 @@ def _resize_geometry_payload(
     return resized_point_map, resized_mask
 
 
+def _resize_rgb_payload(
+    image: torch.Tensor,
+    *,
+    target_height: int,
+    target_width: int,
+) -> torch.Tensor:
+    if tuple(image.shape[-2:]) == (target_height, target_width):
+        return image.detach().cpu().permute(1, 2, 0)
+
+    resized_image = torch.nn.functional.interpolate(
+        image.detach().cpu().unsqueeze(0),
+        size=(target_height, target_width),
+        mode="bilinear",
+        align_corners=False,
+    )[0]
+    return resized_image.permute(1, 2, 0)
+
+
 def _camera_points_to_world(point_map: np.ndarray, pose_c2w: torch.Tensor) -> torch.Tensor:
     point_tensor = torch.from_numpy(point_map.astype(np.float32))
     rot = pose_c2w[:3, :3].detach().cpu().float()
@@ -613,6 +631,8 @@ def _build_geometrycrafter_pointmap(
     local_camera_indices: Sequence[int],
     global_image_indices: Sequence[int],
     cache_entries: Sequence[GeometryCrafterCacheEntry],
+    target_height: int | None = None,
+    target_width: int | None = None,
     device: torch.device | str = "cpu",
 ) -> PointMapGeometryCrafter:
     from matcha.dm_utils.rendering import fov2focal
@@ -644,30 +664,39 @@ def _build_geometrycrafter_pointmap(
         if local_idx not in geometry_by_local_index:
             raise KeyError(f"Missing GeometryCrafter output for local frame {local_idx} (global index {global_image_idx})")
 
-        pointmap_camera = pointmap_cameras.gs_cameras[camera_idx]
         training_camera = training_cameras.gs_cameras[camera_idx]
         img_path_i = str(image_paths[local_idx])
 
-        image_i = pointmap_camera.original_image.permute(1, 2, 0)
-        height, width = image_i.shape[:2]
-        original_image_i = training_camera.original_image.permute(1, 2, 0)
-
-        fx = fov2focal(pointmap_camera.FoVx, width)
-        fy = fov2focal(pointmap_camera.FoVy, height)
-        focal_i = torch.tensor([fx, fy], device=build_device)
-
-        pose_i = _camera_pose_from_gs_camera(pointmap_camera, device=build_device)
-
         camera_space_point_map, valid_mask = geometry_by_local_index[local_idx]
-        resized_point_map, resized_mask = _resize_geometry_payload(
-            camera_space_point_map,
-            valid_mask,
+        height, width = camera_space_point_map.shape[:2]
+        if (
+            target_height is not None
+            and target_width is not None
+            and (height, width) != (target_height, target_width)
+        ):
+            camera_space_point_map, valid_mask = _resize_geometry_payload(
+                camera_space_point_map,
+                valid_mask,
+                target_height=target_height,
+                target_width=target_width,
+            )
+            height, width = target_height, target_width
+
+        image_i = _resize_rgb_payload(
+            training_camera.original_image,
             target_height=height,
             target_width=width,
         )
-        points3d_i = _camera_points_to_world(resized_point_map, pose_i)
-        confidence_i = torch.from_numpy(resized_mask.astype(np.float32))
-        mask_i = torch.from_numpy(resized_mask.astype(bool))
+        original_image_i = image_i.clone()
+
+        fx = fov2focal(training_camera.FoVx, width)
+        fy = fov2focal(training_camera.FoVy, height)
+        focal_i = torch.tensor([fx, fy], device=build_device)
+
+        pose_i = _camera_pose_from_gs_camera(training_camera, device=build_device)
+        points3d_i = _camera_points_to_world(camera_space_point_map.astype(np.float32, copy=False), pose_i)
+        confidence_i = torch.from_numpy(valid_mask.astype(np.float32, copy=False))
+        mask_i = torch.from_numpy(valid_mask.astype(bool, copy=False))
 
         img_paths.append(img_path_i)
         images.append(image_i)
@@ -678,8 +707,8 @@ def _build_geometrycrafter_pointmap(
         confidence.append(confidence_i)
         masks.append(mask_i)
 
-        metadata = {
-            "mode": "hybrid-override-at-align-prep",
+    metadata = {
+        "mode": "hybrid-override-at-align-prep",
         "image_indices": list(global_image_indices),
         "cache_dirs": [str(entry.cache_dir) for entry in cache_entries],
         "view_slots": [entry.sequence.view_slot for entry in cache_entries],
@@ -777,6 +806,8 @@ def run_geometrycrafter_sidecar_from_sfm_data(
         local_camera_indices=local_camera_indices,
         global_image_indices=selected_indices,
         cache_entries=cache_entries,
+        target_height=geometrycrafter_args.get("height"),
+        target_width=geometrycrafter_args.get("width"),
         device=device,
     )
     scene_pm.metadata["cache_root"] = str(resolved_cache_root)

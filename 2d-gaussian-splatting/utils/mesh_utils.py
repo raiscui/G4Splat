@@ -14,6 +14,7 @@ import numpy as np
 import os
 import math
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
 from utils.render_utils import save_img_f32, save_img_u8
 from functools import partial
 import open3d as o3d
@@ -279,17 +280,40 @@ class GaussianExtractor(object):
         return mesh
 
     @torch.no_grad()
-    def export_image(self, path):
+    def export_image(self, path, num_workers=None):
         render_path = os.path.join(path, "renders")
         gts_path = os.path.join(path, "gt")
         vis_path = os.path.join(path, "vis")
         os.makedirs(render_path, exist_ok=True)
         os.makedirs(vis_path, exist_ok=True)
         os.makedirs(gts_path, exist_ok=True)
-        for idx, viewpoint_cam in tqdm(enumerate(self.viewpoint_stack), desc="export images"):
-            gt = viewpoint_cam.original_image[0:3, :, :]
-            save_img_u8(gt.permute(1,2,0).cpu().numpy(), os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
-            save_img_u8(self.rgbmaps[idx].permute(1,2,0).cpu().numpy(), os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-            save_img_f32(self.depthmaps[idx][0].cpu().numpy(), os.path.join(vis_path, 'depth_{0:05d}'.format(idx) + ".tiff"))
+        requested_workers = num_workers
+        if requested_workers is None:
+            requested_workers = min(8, os.cpu_count() or 1)
+        worker_count = max(1, requested_workers)
+
+        frame_payloads = []
+        for idx, viewpoint_cam in enumerate(self.viewpoint_stack):
+            frame_payloads.append((
+                idx,
+                viewpoint_cam.original_image[0:3, :, :].permute(1, 2, 0).cpu().numpy(),
+                self.rgbmaps[idx].permute(1, 2, 0).cpu().numpy(),
+                self.depthmaps[idx][0].cpu().numpy(),
+            ))
+
+        def write_frame(payload):
+            idx, gt_img, render_img, depth_img = payload
+            save_img_u8(gt_img, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
+            save_img_u8(render_img, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
+            save_img_f32(depth_img, os.path.join(vis_path, 'depth_{0:05d}'.format(idx) + ".tiff"))
+
+        if worker_count == 1:
+            for payload in tqdm(frame_payloads, desc="export images"):
+                write_frame(payload)
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = [executor.submit(write_frame, payload) for payload in frame_payloads]
+                for future in tqdm(futures, desc=f"export images ({worker_count} workers)"):
+                    future.result()
             # save_img_u8(self.normals[idx].permute(1,2,0).cpu().numpy() * 0.5 + 0.5, os.path.join(vis_path, 'normal_{0:05d}'.format(idx) + ".png"))
             # save_img_u8(self.depth_normals[idx].permute(1,2,0).cpu().numpy() * 0.5 + 0.5, os.path.join(vis_path, 'depth_normal_{0:05d}'.format(idx) + ".png"))

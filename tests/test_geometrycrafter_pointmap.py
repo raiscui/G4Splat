@@ -21,9 +21,17 @@ from matcha.pointmap.geometrycrafter import (
 
 
 class _FakeCamera:
-    def __init__(self, image_name: str, image_value: int, translation_x: float = 0.0):
+    def __init__(
+        self,
+        image_name: str,
+        image_value: int,
+        translation_x: float = 0.0,
+        *,
+        height: int = 2,
+        width: int = 2,
+    ):
         self.image_name = image_name
-        self.original_image = torch.full((3, 2, 2), float(image_value), dtype=torch.float32)
+        self.original_image = torch.full((3, height, width), float(image_value), dtype=torch.float32)
         self.FoVx = math.pi / 3.0
         self.FoVy = math.pi / 3.0
         self.R = torch.eye(3, dtype=torch.float32)
@@ -90,6 +98,17 @@ class GeometryCrafterHelperTests(unittest.TestCase):
         )
 
         self.assertEqual(source_shape, (1440, 2560))
+        self.assertEqual((resolved_height, resolved_width), (576, 1024))
+
+    def test_resolve_geometrycrafter_processing_resolution_keeps_explicit_recommended_shape(self):
+        image_path = self._write_rgb_with_size("recommended.png", width=1280, height=720)
+
+        resolved_height, resolved_width, _ = _resolve_geometrycrafter_processing_resolution(
+            [image_path],
+            requested_height=576,
+            requested_width=1024,
+        )
+
         self.assertEqual((resolved_height, resolved_width), (576, 1024))
 
     def test_resolve_geometrycrafter_processing_resolution_fills_missing_dimension(self):
@@ -185,6 +204,116 @@ class GeometryCrafterHelperTests(unittest.TestCase):
         np.testing.assert_allclose(scene_pm.points3d[1][0, 0].numpy(), np.array([11.0, 2.0, 3.0], dtype=np.float32))
         np.testing.assert_array_equal(scene_pm.confidence[0].numpy(), valid_mask[0].astype(np.float32))
         self.assertEqual(tuple(scene_pm.original_images[1].shape), (2, 2, 3))
+
+    def test_build_geometrycrafter_pointmap_keeps_geometrycrafter_resolution(self):
+        image_paths = [
+            self._write_rgb("000000_hi.png", 10),
+        ]
+        cache_dir = self.root / "cache_hi"
+        cache_dir.mkdir()
+        npz_path = cache_dir / "view_00.npz"
+        camera_space_points = np.ones((1, 4, 5, 3), dtype=np.float32)
+        valid_mask = np.ones((1, 4, 5), dtype=np.bool_)
+        np.savez(npz_path, point_map=camera_space_points, mask=valid_mask)
+
+        sequence = GeometryCrafterSequence(
+            view_slot=0,
+            source_view_id=0,
+            frames=(
+                GeometryCrafterFrame(
+                    local_index=0,
+                    global_image_index=0,
+                    time_index=0,
+                    view_slot=0,
+                    source_view_id=0,
+                    image_path=image_paths[0],
+                ),
+            ),
+        )
+        cache_entry = GeometryCrafterCacheEntry(
+            sequence=sequence,
+            video_path=cache_dir / "view_00.mp4",
+            npz_path=npz_path,
+            manifest_path=cache_dir / "manifest.json",
+            cache_dir=cache_dir,
+        )
+        pointmap_cameras = _FakeCameraSet(
+            [
+                _FakeCamera("000000", 10, height=2, width=2),
+            ]
+        )
+        training_cameras = _FakeCameraSet(
+            [
+                _FakeCamera("000000", 30, height=8, width=10),
+            ]
+        )
+
+        scene_pm = _build_geometrycrafter_pointmap(
+            pointmap_cameras=pointmap_cameras,
+            training_cameras=training_cameras,
+            test_cameras=None,
+            image_paths=image_paths,
+            local_camera_indices=[0],
+            global_image_indices=[0],
+            cache_entries=[cache_entry],
+            device="cpu",
+        )
+
+        self.assertEqual(tuple(scene_pm.points3d[0].shape), (4, 5, 3))
+        self.assertEqual(tuple(scene_pm.images[0].shape), (4, 5, 3))
+        self.assertEqual(tuple(scene_pm.original_images[0].shape), (4, 5, 3))
+
+    def test_build_geometrycrafter_pointmap_can_resize_to_requested_resolution(self):
+        image_paths = [
+            self._write_rgb("000000_req.png", 10),
+        ]
+        cache_dir = self.root / "cache_req"
+        cache_dir.mkdir()
+        npz_path = cache_dir / "view_00.npz"
+        camera_space_points = np.ones((1, 2, 3, 3), dtype=np.float32)
+        valid_mask = np.ones((1, 2, 3), dtype=np.bool_)
+        np.savez(npz_path, point_map=camera_space_points, mask=valid_mask)
+
+        sequence = GeometryCrafterSequence(
+            view_slot=0,
+            source_view_id=0,
+            frames=(
+                GeometryCrafterFrame(
+                    local_index=0,
+                    global_image_index=0,
+                    time_index=0,
+                    view_slot=0,
+                    source_view_id=0,
+                    image_path=image_paths[0],
+                ),
+            ),
+        )
+        cache_entry = GeometryCrafterCacheEntry(
+            sequence=sequence,
+            video_path=cache_dir / "view_00.mp4",
+            npz_path=npz_path,
+            manifest_path=cache_dir / "manifest.json",
+            cache_dir=cache_dir,
+        )
+        pointmap_cameras = _FakeCameraSet([_FakeCamera("000000", 10, height=2, width=2)])
+        training_cameras = _FakeCameraSet([_FakeCamera("000000", 30, height=8, width=10)])
+
+        scene_pm = _build_geometrycrafter_pointmap(
+            pointmap_cameras=pointmap_cameras,
+            training_cameras=training_cameras,
+            test_cameras=None,
+            image_paths=image_paths,
+            local_camera_indices=[0],
+            global_image_indices=[0],
+            cache_entries=[cache_entry],
+            target_height=4,
+            target_width=5,
+            device="cpu",
+        )
+
+        self.assertEqual(tuple(scene_pm.points3d[0].shape), (4, 5, 3))
+        self.assertEqual(tuple(scene_pm.images[0].shape), (4, 5, 3))
+        self.assertEqual(tuple(scene_pm.original_images[0].shape), (4, 5, 3))
 
 
 if __name__ == "__main__":

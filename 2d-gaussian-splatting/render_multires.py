@@ -48,6 +48,7 @@ if __name__ == "__main__":
     parser.add_argument("--multires_factors", default=[2,8,16], nargs='+', type=int, help='Mesh: multiresolution factors')
     parser.add_argument("--output_dir", type=str, default=None, help='Path to save the output mesh.')
     parser.add_argument("--use_default_output_dir", action="store_true")
+    parser.add_argument("--export_workers", default=None, type=int, help='Parallel workers for image export. Defaults to up to 8 threads.')
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
@@ -71,14 +72,14 @@ if __name__ == "__main__":
         print("export training images ...")
         os.makedirs(train_dir, exist_ok=True)
         gaussExtractor.reconstruction(scene.getTrainCameras())
-        gaussExtractor.export_image(train_dir)
+        gaussExtractor.export_image(train_dir, num_workers=args.export_workers)
         
     
     if (not args.skip_test) and (len(scene.getTestCameras()) > 0):
         print("export rendered testing images ...")
         os.makedirs(test_dir, exist_ok=True)
         gaussExtractor.reconstruction(scene.getTestCameras())
-        gaussExtractor.export_image(test_dir)
+        gaussExtractor.export_image(test_dir, num_workers=args.export_workers)
     
     
     if args.render_path:
@@ -88,7 +89,7 @@ if __name__ == "__main__":
         n_fames = 240
         cam_traj = generate_path(scene.getTrainCameras(), n_frames=n_fames)
         gaussExtractor.reconstruction(cam_traj)
-        gaussExtractor.export_image(traj_dir)
+        gaussExtractor.export_image(traj_dir, num_workers=args.export_workers)
         create_videos(base_dir=traj_dir,
                     input_dir=traj_dir, 
                     out_name='render_traj', 

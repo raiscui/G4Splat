@@ -4,6 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
 import torch
+import torch.nn.functional as F
 import yaml
 
 from matcha.pointmap.depthanythingv2 import get_pointmap_from_mast3r_scene_with_depthanything
@@ -26,6 +27,56 @@ def parse_optional_image_indices(raw_value):
         normalized = normalized[1:-1]
     tokens = normalized.replace(',', ' ').split()
     return [int(token) for token in tokens]
+
+
+def _resize_depth_maps(depth_maps: torch.Tensor, target_height: int, target_width: int) -> torch.Tensor:
+    if tuple(depth_maps.shape[-2:]) == (target_height, target_width):
+        return depth_maps
+    return F.interpolate(
+        depth_maps[:, None],
+        size=(target_height, target_width),
+        mode="bilinear",
+        align_corners=False,
+    )[:, 0]
+
+
+def _resize_boolean_maps(boolean_maps: torch.Tensor, target_height: int, target_width: int) -> torch.Tensor:
+    if tuple(boolean_maps.shape[-2:]) == (target_height, target_width):
+        return boolean_maps
+    resized = F.interpolate(
+        boolean_maps[:, None].float(),
+        size=(target_height, target_width),
+        mode="nearest",
+    )[:, 0]
+    return resized > 0.5
+
+
+def _prepare_reference_depth_maps(scene_pm, sfm_data, scaled_cameras, scale_factor: float) -> torch.Tensor:
+    target_height, target_width = scene_pm.points3d.shape[1:3]
+    reference_depth_maps = []
+    lowres_cameras = sfm_data['pointmap_cameras']
+
+    for i_chart in range(len(scaled_cameras)):
+        image_name = scaled_cameras.gs_cameras[i_chart].image_name.split('.')[0]
+        point_ids = sfm_data['image_sfm_points'][image_name]
+        reference_depth_values = scaled_cameras.p3d_cameras[i_chart].get_world_to_view_transform().transform_points(
+            scale_factor * sfm_data['sfm_xyz'][point_ids]
+        )[..., 2]
+
+        source_height = lowres_cameras.gs_cameras[i_chart].image_height
+        source_width = lowres_cameras.gs_cameras[i_chart].image_width
+        expected_values = source_height * source_width
+        if reference_depth_values.numel() != expected_values:
+            raise RuntimeError(
+                f"Reference depth count for {image_name} is {reference_depth_values.numel()}, "
+                f"but pointmap resolution is {source_height}x{source_width} ({expected_values} values). "
+                "This path expects dense per-pixel MASt3R pointmaps; keep pointmap.max_sfm_points=null."
+            )
+
+        reference_depth_maps.append(reference_depth_values.view(1, source_height, source_width))
+
+    stacked_depth_maps = torch.cat(reference_depth_maps, dim=0)
+    return _resize_depth_maps(stacked_depth_maps, target_height, target_width)
 
 
 if __name__ == '__main__':
@@ -59,8 +110,18 @@ if __name__ == '__main__':
         help='Comma-separated source-view ids matching the interleaved COLMAP order.',
     )
     parser.add_argument('--geometrycrafter_model_type', type=str, default='diff', choices=['diff', 'determ'])
-    parser.add_argument('--geometrycrafter_height', type=int, default=None)
-    parser.add_argument('--geometrycrafter_width', type=int, default=None)
+    parser.add_argument(
+        '--geometrycrafter_height',
+        type=int,
+        default=576,
+        help='GeometryCrafter processing height. Defaults to the recommended 576.',
+    )
+    parser.add_argument(
+        '--geometrycrafter_width',
+        type=int,
+        default=1024,
+        help='GeometryCrafter processing width. Defaults to the recommended 1024.',
+    )
     parser.add_argument('--geometrycrafter_downsample_ratio', type=float, default=1.0)
     parser.add_argument('--geometrycrafter_num_inference_steps', type=int, default=5)
     parser.add_argument('--geometrycrafter_guidance_scale', type=float, default=1.0)
@@ -203,14 +264,19 @@ if __name__ == '__main__':
     _pointmap_cameras = rescale_cameras(_pointmap_cameras, _scale_factor)
     
     # Rescale and prepare reference data based on SFM method
-    reference_data = torch.cat([
-        _pointmap_cameras.p3d_cameras[i_chart].get_world_to_view_transform().transform_points(
-            _scale_factor * sfm_data['sfm_xyz'][sfm_data['image_sfm_points'][_pointmap_cameras.gs_cameras[i_chart].image_name.split('.')[0]]]
-        )[..., 2].view(scene_pm.points3d[i_chart][..., 0].shape)[None]
-        for i_chart in range(len(_pointmap_cameras))
-    ], dim=0)
+    reference_data = _prepare_reference_depth_maps(
+        scene_pm,
+        sfm_data,
+        _pointmap_cameras,
+        _scale_factor,
+    )
     if masking_config['use_masks_for_alignment']:
         mast3r_masks = mast3r_pm.confidence > masking_config['sfm_mask_threshold']
+        mast3r_masks = _resize_boolean_maps(
+            mast3r_masks,
+            target_height=scene_pm.points3d.shape[1],
+            target_width=scene_pm.points3d.shape[2],
+        )
         CONSOLE.print(f"[INFO] {mast3r_masks.sum()} points in masks.")
     else:
         mast3r_masks = None
