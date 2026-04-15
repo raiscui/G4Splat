@@ -32,18 +32,22 @@ opacity_cull: 0.034
 percent_dense: 0.01
 
 # 几何与正则相关参数。
-depth_ratio: 0.45
-normal_consistency_from: 5200
-distortion_from: 2600
+depth_ratio: 0.65
+normal_consistency_from: 4500
+distortion_from: 2000
 
 # 开启 mip filter，通常会让训练与渲染更稳定。
-use_mip_filter: false
+use_mip_filter: true
+
+# mip filter 强度。值越小，远处细节保留越多；值越大，远处更稳定但更容易糊。
+# mip_filter_variance: 0.2
+mip_filter_variance: 0.08
 
 # 允许在训练开始前先对初始高斯做下采样。
 use_downsample_gaussians: false
 
 # dense-view 阶段的初始高斯预算上限。
-max_init_gaussians: 2000000
+max_init_gaussians: 2200000
 
 # 初始高斯下采样使用的体素大小。
 # 调大：最终 ply 往往更小。

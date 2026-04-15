@@ -14,30 +14,34 @@ iterations: 15000
 # densify 调度：
 # 从第 500 步开始允许新增高斯，在第 2000 步后停止 densify。
 densify_from_iter: 500
-densify_until_iter: 7000
+densify_until_iter: 8000
 
 # 每 200 步做一次 densify/prune。
 densification_interval: 130
 
 # 梯度阈值越高，可被 clone/split 的高斯越少。
-densify_grad_threshold: 0.0002
+densify_grad_threshold: 0.00024
 
 # 定期重置 opacity，用来稳定后续的 prune 行为。
 opacity_reset_interval: 800
 
 # opacity 剪枝阈值。值越高，弱高斯删得越狠。
-opacity_cull: 0.034
+opacity_cull: 0.04
 
 # Gaussian trainer 内部用于区分 clone / split 的尺度阈值比例。
 percent_dense: 0.01
 
 # 几何与正则相关参数。
-depth_ratio: 0.45
-normal_consistency_from: 5200
-distortion_from: 2600
+depth_ratio: 0.6
+normal_consistency_from: 4500
+distortion_from: 2000
 
 # 开启 mip filter，通常会让训练与渲染更稳定。
-use_mip_filter: false
+use_mip_filter: true
+
+# mip filter 强度。值越小，远处细节保留越多；值越大，远处更稳定但更容易糊。
+# mip_filter_variance: 0.2
+mip_filter_variance: 0.11
 
 # 允许在训练开始前先对初始高斯做下采样。
 use_downsample_gaussians: false

@@ -100,6 +100,9 @@ if __name__ == '__main__':
     parser.add_argument('--geometrycrafter_use_extract_interp', action='store_true')
     parser.add_argument('--geometrycrafter_track_time', action='store_true')
     parser.add_argument('--geometrycrafter_low_memory_usage', action='store_true')
+    parser.add_argument('--geometrycrafter_parallel_sequences', type=int, default=1,
+        help='How many GeometryCrafter interleaved sequences to execute in parallel.'
+    )
     
     # Free Gaussians config
     parser.add_argument('--free_gaussians_config', type=str, default=None, 
@@ -131,6 +134,15 @@ if __name__ == '__main__':
     parser.add_argument('--use_downsample_gaussians', action='store_true', help='Use downsample gaussians for training')
     parser.add_argument('--use_mesh_filter', action='store_true', help='Use mesh filter')
     parser.add_argument('--use_dense_view', action='store_true', help='Use dense view for training')                    # Add an additional input stage to extend plane-aware depth estimation across all input views
+    parser.add_argument('--skip_render_all_img', action='store_true',
+        help='Skip exporting all rendered training images before mesh extraction.'
+    )
+    parser.add_argument('--export_workers', type=int, default=None,
+        help='Parallel workers for render_all_img export, forwarded to render_multires.py.'
+    )
+    parser.add_argument('--mip_filter_variance', type=float, default=None,
+        help='Override mip filter strength during free-gaussians training. Lower keeps more distant detail.'
+    )
     parser.add_argument('--checkpoint_iterations', type=int, nargs='*', default=None,
         help='Checkpoint iteration list forwarded to free-gaussians refinement training.'
     )
@@ -233,6 +245,7 @@ if __name__ == '__main__':
     append_optional_arg(align_charts_command_parts, "--geometrycrafter_use_extract_interp", args.geometrycrafter_use_extract_interp)
     append_optional_arg(align_charts_command_parts, "--geometrycrafter_track_time", args.geometrycrafter_track_time)
     append_optional_arg(align_charts_command_parts, "--geometrycrafter_low_memory_usage", args.geometrycrafter_low_memory_usage)
+    append_optional_arg(align_charts_command_parts, "--geometrycrafter_parallel_sequences", args.geometrycrafter_parallel_sequences)
     align_charts_command = " ".join(align_charts_command_parts)
     
     # NOTE: hard code plane-refine-depths path
@@ -251,6 +264,7 @@ if __name__ == '__main__':
         refine_free_gaussians_command_parts.append(dense_arg)
     if args.use_downsample_gaussians:
         refine_free_gaussians_command_parts.append("--use_downsample_gaussians")
+    append_optional_arg(refine_free_gaussians_command_parts, "--mip_filter_variance", args.mip_filter_variance)
     if args.checkpoint_iterations:
         refine_free_gaussians_command_parts.extend([
             "--checkpoint_iterations",
@@ -268,6 +282,8 @@ if __name__ == '__main__':
         "--render_all_img",
         "--use_default_output_dir",
     ])
+    if args.export_workers is not None:
+        render_all_img_command = " ".join([render_all_img_command, "--export_workers", str(args.export_workers)])
     
     tsdf_command = " ".join([
         "python", "scripts/extract_tsdf_mesh.py",
@@ -394,11 +410,37 @@ if __name__ == '__main__':
 
         # generate depth and normal for dense views
         gen_dn_dense_views_command = " ".join([
-            "python", "2d-gaussian-splatting/guidance/dense_dn_util.py",
+            "python", "2d-gaussian-splatting/guidance/dense_gc_util.py",
             "--source_path", mast3r_scene_path,
             "--model_path", free_gaussians_path,
             "--iteration", "7000",
+            "--geometrycrafter_repo", args.geometrycrafter_repo,
+            "--geometrycrafter_num_views", str(args.geometrycrafter_num_views),
+            "--geometrycrafter_view_order", args.geometrycrafter_view_order,
+            "--geometrycrafter_model_type", args.geometrycrafter_model_type,
+            "--geometrycrafter_height", str(args.geometrycrafter_height),
+            "--geometrycrafter_width", str(args.geometrycrafter_width),
+            "--geometrycrafter_downsample_ratio", str(args.geometrycrafter_downsample_ratio),
+            "--geometrycrafter_num_inference_steps", str(args.geometrycrafter_num_inference_steps),
+            "--geometrycrafter_guidance_scale", str(args.geometrycrafter_guidance_scale),
+            "--geometrycrafter_window_size", str(args.geometrycrafter_window_size),
+            "--geometrycrafter_decode_chunk_size", str(args.geometrycrafter_decode_chunk_size),
+            "--geometrycrafter_overlap", str(args.geometrycrafter_overlap),
+            "--geometrycrafter_process_length", str(args.geometrycrafter_process_length),
+            "--geometrycrafter_process_stride", str(args.geometrycrafter_process_stride),
+            "--geometrycrafter_seed", str(args.geometrycrafter_seed),
+            "--geometrycrafter_parallel_sequences", str(args.geometrycrafter_parallel_sequences),
+            "--geometrycrafter_force_projection" if args.geometrycrafter_force_projection else "--geometrycrafter_no_force_projection",
+            "--geometrycrafter_force_fixed_focal" if args.geometrycrafter_force_fixed_focal else "--geometrycrafter_no_force_fixed_focal",
         ])
+        if args.geometrycrafter_cache_root is not None:
+            gen_dn_dense_views_command = " ".join([gen_dn_dense_views_command, "--geometrycrafter_cache_root", args.geometrycrafter_cache_root])
+        if args.geometrycrafter_use_extract_interp:
+            gen_dn_dense_views_command = " ".join([gen_dn_dense_views_command, "--geometrycrafter_use_extract_interp"])
+        if args.geometrycrafter_track_time:
+            gen_dn_dense_views_command = " ".join([gen_dn_dense_views_command, "--geometrycrafter_track_time"])
+        if args.geometrycrafter_low_memory_usage:
+            gen_dn_dense_views_command = " ".join([gen_dn_dense_views_command, "--geometrycrafter_low_memory_usage"])
         run_command_safe(gen_dn_dense_views_command)
 
         run_command_safe(generate_2Dplane_command)
@@ -408,7 +450,8 @@ if __name__ == '__main__':
         run_command_safe(refine_free_gaussians_command)
 
         # render all images, export mesh, and evaluate
-        run_command_safe(render_all_img_command)
+        if not args.skip_render_all_img:
+            run_command_safe(render_all_img_command)
         run_command_safe(tetra_command)
 
         print("Finished training dense view without See3D prior!")
@@ -441,7 +484,8 @@ if __name__ == '__main__':
     run_command_safe(refine_free_gaussians_command)
 
     # render all images, export mesh, and evaluate
-    run_command_safe(render_all_img_command)
+    if not args.skip_render_all_img:
+        run_command_safe(render_all_img_command)
     run_command_safe(tetra_command)
 
     if args.use_mesh_filter:

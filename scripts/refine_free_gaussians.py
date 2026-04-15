@@ -46,6 +46,8 @@ if __name__ == '__main__':
                         help='Image downsampling factor forwarded to 2DGS training. Use 2 for half-resolution.')
     parser.add_argument('--checkpoint_iterations', type=int, nargs='*', default=None,
                         help='Checkpoint iteration list forwarded to 2DGS training.')
+    parser.add_argument('--mip_filter_variance', type=float, default=None,
+                        help='Override mip filter strength. Lower values preserve more distant detail.')
 
     parser.add_argument('--refine_depth_path', type=str, default=None, help='Path to the refine depth directory')
     parser.add_argument('--use_downsample_gaussians', action='store_true', help='Use downsample gaussians')
@@ -102,6 +104,10 @@ if __name__ == '__main__':
             command_parts.extend(dense_arg.split())
 
         append_optional_arg(command_parts, "--use_mip_filter", config.get("use_mip_filter", False))
+        mip_filter_variance = args.mip_filter_variance
+        if mip_filter_variance is None:
+            mip_filter_variance = config.get("mip_filter_variance")
+        append_optional_arg(command_parts, "--mip_filter_variance", mip_filter_variance)
         append_optional_arg(command_parts, "--densify_from_iter", config.get("densify_from_iter"))
         append_optional_arg(command_parts, "--densification_interval", config.get("densification_interval"))
         append_optional_arg(command_parts, "--densify_grad_threshold", config.get("densify_grad_threshold"))

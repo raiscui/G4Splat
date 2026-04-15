@@ -39,6 +39,9 @@ distortion_from: 2500
 # 开启 mip filter，通常会让训练与渲染更稳定。
 use_mip_filter: true
 
+# mip filter 强度。值越小，远处细节保留越多；值越大，远处更稳定但更容易糊。
+mip_filter_variance: 0.2
+
 # 允许在训练开始前先对初始高斯做下采样。
 use_downsample_gaussians: false
 

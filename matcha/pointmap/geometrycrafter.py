@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Sequence
 
 import numpy as np
@@ -532,15 +533,22 @@ def _run_geometrycrafter_sequences(
     python_executable: str,
     geometrycrafter_args: dict[str, Any],
     force: bool,
+    parallel_sequences: int = 1,
 ) -> None:
     script_path = geometrycrafter_root / "run.py"
     if not script_path.exists():
         raise FileNotFoundError(f"GeometryCrafter entrypoint not found: {script_path}")
 
+    pending_entries = []
     for entry in cache_entries:
         if not force and entry.npz_path.exists():
             continue
+        pending_entries.append(entry)
 
+    if not pending_entries:
+        return
+
+    def run_single_entry(entry: GeometryCrafterCacheEntry) -> None:
         command = [
             python_executable,
             str(script_path),
@@ -560,6 +568,17 @@ def _run_geometrycrafter_sequences(
             )
         if generated_npz_path != entry.npz_path:
             generated_npz_path.replace(entry.npz_path)
+
+    worker_count = max(1, int(parallel_sequences))
+    if worker_count == 1:
+        for entry in pending_entries:
+            run_single_entry(entry)
+        return
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(run_single_entry, entry) for entry in pending_entries]
+        for future in as_completed(futures):
+            future.result()
 
 
 def _resize_geometry_payload(
@@ -747,6 +766,7 @@ def run_geometrycrafter_sidecar_from_sfm_data(
     layout: str = "auto",
     video_fps: int = 6,
     force: bool = False,
+    parallel_sequences: int = 1,
     device: torch.device | str = "cpu",
     geometrycrafter_args: dict[str, Any] | None = None,
 ) -> tuple[PointMapGeometryCrafter, list[GeometryCrafterCacheEntry]]:
@@ -789,6 +809,7 @@ def run_geometrycrafter_sidecar_from_sfm_data(
         python_executable=python_executable or _default_geometrycrafter_python(Path(geometrycrafter_root)),
         geometrycrafter_args=geometrycrafter_args,
         force=force,
+        parallel_sequences=parallel_sequences,
     )
     parsed_view_order = parse_view_order(view_order, num_views=num_views) if num_views > 1 else (0,)
     sidecar_manifest_path = _write_sidecar_manifest(
@@ -836,6 +857,7 @@ def get_pointmap_from_mast3r_scene_with_geometrycrafter(
     geometrycrafter_layout: str = "auto",
     geometrycrafter_video_fps: int = 6,
     geometrycrafter_force: bool = False,
+    geometrycrafter_parallel_sequences: int = 1,
     geometrycrafter_args: dict[str, Any] | None = None,
     python_executable: str | None = None,
     sidecar_only: bool = False,
@@ -887,6 +909,7 @@ def get_pointmap_from_mast3r_scene_with_geometrycrafter(
         layout=geometrycrafter_layout,
         video_fps=geometrycrafter_video_fps,
         force=geometrycrafter_force,
+        parallel_sequences=geometrycrafter_parallel_sequences,
         device=device,
         geometrycrafter_args=geometrycrafter_args,
     )

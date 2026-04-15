@@ -108,6 +108,9 @@ def merge_normal_clusters(pred, sorted_topk, centers):
 
     if new_num_clusters != num_clusters:
         count_values = np.bincount(new_pred)
+        new_num_clusters = min(new_num_clusters, len(count_values))
+        if new_num_clusters <= 0:
+            return new_pred, np.array([], dtype=np.int64), 0
         topk = np.argpartition(count_values,-new_num_clusters)[-new_num_clusters:]
         sorted_topk_idx = np.argsort(count_values[topk])
         sorted_topk = topk[sorted_topk_idx][::-1]

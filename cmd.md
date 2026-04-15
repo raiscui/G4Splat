@@ -35,7 +35,7 @@ pixi run python scripts/generate_view_split.py \
 ```bash
 CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
 -s /autodl-fs/data/fastgs/nt1_sr \
--o data/g4/nt1_sr_sm10 \
+-o data/g4/nt1_sr_sm13 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -48,13 +48,14 @@ CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
 --geometry_prior_mode hybrid-override-at-align-prep \
 --checkpoint_iterations 18000 \
 --export_workers 16 \
---free_gaussians_config dense_compact_sm10   --dense_regul weak
-
+--skip_render_all_img \
+--geometrycrafter_parallel_sequences 2 \
+--free_gaussians_config dense_compact_sm13   --dense_regul weak
 
 
 CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 -s /autodl-fs/data/fastgs/nt6_sr \
--o data/g4/nt6_sr_sm10 \
+-o data/g4/nt6_sr_sm13 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -65,7 +66,11 @@ CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 --merge_resolution_scale 1 \
 --depth_model geometrycrafter \
 --geometry_prior_mode hybrid-override-at-align-prep \
---free_gaussians_config dense_compact_sm10   --dense_regul weak
+--checkpoint_iterations 18000 \
+--export_workers 16 \
+--skip_render_all_img \
+--geometrycrafter_parallel_sequences 2 \
+--free_gaussians_config dense_compact_sm13   --dense_regul weak
 
 
 

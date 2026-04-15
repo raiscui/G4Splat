@@ -120,6 +120,7 @@ def training(
     dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, 
     use_refined_charts, use_mip_filter, dense_data_path, use_chart_view_every_n_iter,
     normal_consistency_from, distortion_from,
+    mip_filter_variance,
     depthanythingv2_checkpoint_dir, depthanything_encoder, 
     dense_regul, refine_depth_path, use_downsample_gaussians,
     max_init_gaussians, init_voxel_size, max_init_input_views, init_point_stride,
@@ -388,9 +389,9 @@ def training(
 
     # Set mip filter
     if use_mip_filter:
-        print("[INFO] Using mip filter during training.")
+        print(f"[INFO] Using mip filter during training with variance {mip_filter_variance}.")
         gaussians.set_mip_filter(use_mip_filter)
-        gaussians.compute_mip_filter(cameras=total_views_list)
+        gaussians.compute_mip_filter(cameras=total_views_list, filter_variance=mip_filter_variance)
 
     # # ===================================================================================
     
@@ -633,7 +634,7 @@ def training(
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
                     if gaussians.use_mip_filter:
-                        gaussians.compute_mip_filter(cameras=total_views_list)
+                        gaussians.compute_mip_filter(cameras=total_views_list, filter_variance=mip_filter_variance)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -642,7 +643,7 @@ def training(
                 if iteration < opt.iterations - 100:  # don't update in the end of training
                     torch.cuda.empty_cache()
                     if gaussians.use_mip_filter:
-                        gaussians.compute_mip_filter(cameras=total_views_list)
+                        gaussians.compute_mip_filter(cameras=total_views_list, filter_variance=mip_filter_variance)
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -792,6 +793,7 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--use_refined_charts", action="store_true", default=False)
     parser.add_argument("--use_mip_filter", action="store_true", default=False)
+    parser.add_argument("--mip_filter_variance", type=float, default=0.2)
     parser.add_argument("--dense_data_path", type=str, default=None)
     parser.add_argument("--use_chart_view_every_n_iter", type=int, default=999_999)
     parser.add_argument("--normal_consistency_from", type=int, default=3500)
@@ -820,7 +822,7 @@ if __name__ == "__main__":
         args.test_iterations, args.save_iterations, args.checkpoint_iterations, 
         args.start_checkpoint, args.use_refined_charts, args.use_mip_filter, 
         args.dense_data_path, args.use_chart_view_every_n_iter,
-        args.normal_consistency_from, args.distortion_from,
+        args.normal_consistency_from, args.distortion_from, args.mip_filter_variance,
         args.depthanythingv2_checkpoint_dir, args.depthanything_encoder,
         args.dense_regul, args.refine_depth_path, args.use_downsample_gaussians,
         args.max_init_gaussians, args.init_voxel_size,

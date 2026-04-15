@@ -45,6 +45,9 @@ def normals_cluster(
     centers = kmeans.cluster_centers_
 
     count_values = np.bincount(pred_valid)
+    effective_clusters = min(effective_clusters, len(count_values))
+    if effective_clusters <= 0:
+        return []
     topk = np.argpartition(count_values, -effective_clusters)[-effective_clusters:]
     sorted_topk_idx = np.argsort(count_values[topk])
     sorted_topk = topk[sorted_topk_idx][::-1]

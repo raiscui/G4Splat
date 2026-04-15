@@ -138,6 +138,8 @@ if __name__ == '__main__':
     parser.add_argument('--geometrycrafter_use_extract_interp', action='store_true')
     parser.add_argument('--geometrycrafter_track_time', action='store_true')
     parser.add_argument('--geometrycrafter_low_memory_usage', action='store_true')
+    parser.add_argument('--geometrycrafter_parallel_sequences', type=int, default=1,
+                        help='How many GeometryCrafter interleaved sequences to execute in parallel.')
     
     # Deprecated arguments (should not be used)
     parser.add_argument('--image_indices', type=str, default=None)
@@ -217,6 +219,7 @@ if __name__ == '__main__':
             geometrycrafter_cache_root=args.geometrycrafter_cache_root or os.path.join(args.output_path, 'geometrycrafter_cache'),
             geometrycrafter_num_views=args.geometrycrafter_num_views,
             geometrycrafter_view_order=parse_view_order(args.geometrycrafter_view_order),
+            geometrycrafter_parallel_sequences=args.geometrycrafter_parallel_sequences,
             geometrycrafter_args=geometrycrafter_args,
             sidecar_only=args.geometry_prior_mode == 'sidecar-only',
             device=device,
