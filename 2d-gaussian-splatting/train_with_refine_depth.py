@@ -57,6 +57,46 @@ from PIL import Image
 import numpy as np
 import trimesh
 
+
+DEFAULT_DEPTH_ORDER_SCHEDULE = (
+    (1500, 1.0),
+    (3000, 0.1),
+    (4500, 0.01),
+    (6000, 0.001),
+)
+
+
+def parse_depth_order_schedule(raw_value):
+    if raw_value is None:
+        return list(DEFAULT_DEPTH_ORDER_SCHEDULE)
+
+    normalized = str(raw_value).strip()
+    if not normalized:
+        return list(DEFAULT_DEPTH_ORDER_SCHEDULE)
+
+    schedule = []
+    for chunk in normalized.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                f"Invalid depth order schedule item '{item}'. Expected '<iteration>:<weight>'."
+            )
+        iteration_str, weight_str = item.split(":", 1)
+        schedule.append((int(iteration_str.strip()), float(weight_str.strip())))
+
+    schedule.sort(key=lambda pair: pair[0])
+    return schedule
+
+
+def get_depth_order_lambda(iteration, schedule):
+    lambda_depth_order = 0.0
+    for start_iter, weight in schedule:
+        if iteration > start_iter:
+            lambda_depth_order = float(weight)
+    return lambda_depth_order
+
 # Old confidence to increasing weight function
 # def confidence_to_weight(confidence:torch.Tensor):
 #     conf_weights = confidence - 1.
@@ -121,7 +161,7 @@ def training(
     dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, 
     use_refined_charts, use_mip_filter, dense_data_path, use_chart_view_every_n_iter,
     normal_consistency_from, distortion_from,
-    mip_filter_variance,
+    mip_filter_variance, depth_order_schedule,
     depthanythingv2_checkpoint_dir, depthanything_encoder, 
     dense_regul, refine_depth_path, use_downsample_gaussians,
     camera_source_path,
@@ -425,6 +465,7 @@ def training(
     use_depth_order_regularization = True
     if use_depth_order_regularization:
         print(f"[INFO] Using depth order regularization for charts.")
+        print(f"[INFO] Depth order schedule: {depth_order_schedule}")
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -517,15 +558,7 @@ def training(
             depth_order_loss_log_scale = 20.
             
             # Scheduling
-            lambda_depth_order = 0.
-            if iteration > 1_500:
-                lambda_depth_order = 1.
-            if iteration > 3_000:
-                lambda_depth_order = 0.1
-            if iteration > 4_500:
-                lambda_depth_order = 0.01
-            if iteration > 6_000:
-                lambda_depth_order = 0.001
+            lambda_depth_order = get_depth_order_lambda(iteration, depth_order_schedule)
                 
             # Compute depth prior loss
             # order_supervision_depth = charts_prior_depths[viewpoint_idx].to(surf_depth.device)
@@ -822,6 +855,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_refined_charts", action="store_true", default=False)
     parser.add_argument("--use_mip_filter", action="store_true", default=False)
     parser.add_argument("--mip_filter_variance", type=float, default=0.2)
+    parser.add_argument(
+        "--depth_order_schedule",
+        type=str,
+        default=None,
+        help="Comma-separated depth order schedule such as '1500:1.0,3000:0.1,4500:0.01,6000:0.001'.",
+    )
     parser.add_argument("--dense_data_path", type=str, default=None)
     parser.add_argument("--use_chart_view_every_n_iter", type=int, default=999_999)
     parser.add_argument("--normal_consistency_from", type=int, default=3500)
@@ -845,12 +884,13 @@ if __name__ == "__main__":
         print(f"Randomly selected port: {args.port}")
     # network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
+    depth_order_schedule = parse_depth_order_schedule(args.depth_order_schedule)
     training(
         lp.extract(args), op.extract(args), pp.extract(args), 
         args.test_iterations, args.save_iterations, args.checkpoint_iterations, 
         args.start_checkpoint, args.use_refined_charts, args.use_mip_filter, 
         args.dense_data_path, args.use_chart_view_every_n_iter,
-        args.normal_consistency_from, args.distortion_from, args.mip_filter_variance,
+        args.normal_consistency_from, args.distortion_from, args.mip_filter_variance, depth_order_schedule,
         args.depthanythingv2_checkpoint_dir, args.depthanything_encoder,
         args.dense_regul, args.refine_depth_path, args.use_downsample_gaussians,
         args.camera_source_path,

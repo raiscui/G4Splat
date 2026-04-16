@@ -26,6 +26,34 @@ def append_optional_arg(command_parts, flag, value):
         return
     command_parts.extend([flag, str(value)])
 
+
+def serialize_depth_order_schedule(schedule):
+    if schedule is None:
+        return None
+    if isinstance(schedule, str):
+        normalized = schedule.strip()
+        return normalized or None
+
+    serialized_items = []
+    for item in schedule:
+        if isinstance(item, dict):
+            if "iteration" not in item or "weight" not in item:
+                raise ValueError(
+                    "depth_order_schedule dict items must contain 'iteration' and 'weight' keys."
+                )
+            iteration = int(item["iteration"])
+            weight = float(item["weight"])
+        else:
+            if len(item) != 2:
+                raise ValueError(
+                    "depth_order_schedule items must be pairs like [iteration, weight]."
+                )
+            iteration = int(item[0])
+            weight = float(item[1])
+        serialized_items.append(f"{iteration}:{weight}")
+
+    return ",".join(serialized_items) or None
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
@@ -49,6 +77,12 @@ if __name__ == '__main__':
                         help='Checkpoint iteration list forwarded to 2DGS training.')
     parser.add_argument('--mip_filter_variance', type=float, default=None,
                         help='Override mip filter strength. Lower values preserve more distant detail.')
+    parser.add_argument(
+        '--depth_order_schedule',
+        type=str,
+        default=None,
+        help="Override the depth order schedule with 'iteration:weight,...'.",
+    )
 
     parser.add_argument('--refine_depth_path', type=str, default=None, help='Path to the refine depth directory')
     parser.add_argument('--use_downsample_gaussians', action='store_true', help='Use downsample gaussians')
@@ -110,6 +144,10 @@ if __name__ == '__main__':
         if mip_filter_variance is None:
             mip_filter_variance = config.get("mip_filter_variance")
         append_optional_arg(command_parts, "--mip_filter_variance", mip_filter_variance)
+        depth_order_schedule = args.depth_order_schedule
+        if depth_order_schedule is None:
+            depth_order_schedule = serialize_depth_order_schedule(config.get("depth_order_schedule"))
+        append_optional_arg(command_parts, "--depth_order_schedule", depth_order_schedule)
         append_optional_arg(command_parts, "--densify_from_iter", config.get("densify_from_iter"))
         append_optional_arg(command_parts, "--densification_interval", config.get("densification_interval"))
         append_optional_arg(command_parts, "--densify_grad_threshold", config.get("densify_grad_threshold"))

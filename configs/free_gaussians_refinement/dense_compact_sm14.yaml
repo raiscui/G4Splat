@@ -35,6 +35,29 @@ percent_dense: 0.01
 depth_ratio: 0.7
 normal_consistency_from: 4500
 distortion_from: 2000
+# depth_order_schedule:
+#   - [1500, 1.0]
+#   - [3000, 0.1]
+#   - [4500, 0.01]
+#   - [6000, 0.001]
+
+
+depth_order_schedule:
+    - [1500, 1.0]
+    - [6000, 0.3]
+    - [10000, 0.1]
+    - [14000, 0.03]
+
+
+  # - depth_order_schedule
+  #     - 管的是几何约束强弱
+  #     - 它直接决定“远近关系会不会被训练后期又抹坏”
+  #     - 这是更接近根因的那个旋钮
+  # - mip_filter_variance
+  #     - 管的是渲染时的平滑/抗锯齿强度
+  #     - 值越大，远处更稳定，但更容易糊、像雾
+  #     - 值越小，远处细节保留更多，但可能更噪、更闪
+  #     - 它会放大或减轻“远处像雾”的视觉感受，但通常不是造成错误深度排序的主因
 
 # 开启 mip filter，通常会让训练与渲染更稳定。
 use_mip_filter: true

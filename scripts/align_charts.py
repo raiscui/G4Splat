@@ -11,6 +11,7 @@ import yaml
 from matcha.pointmap.depthanythingv2 import get_pointmap_from_mast3r_scene_with_depthanything
 from matcha.dm_scene.cameras import CamerasWrapper, rescale_cameras, create_gs_cameras_from_pointmap
 from matcha.dm_trainers.charts_alignment import align_charts_in_parallel, save_charts_data_npz
+from matcha.pointmap.depthanythingv2 import get_points_depth_in_depthmap
 
 from rich.console import Console
 
@@ -147,6 +148,61 @@ def _resize_boolean_maps(boolean_maps: torch.Tensor, target_height: int, target_
     return resized > 0.5
 
 
+def _fit_affine_depth_from_sparse_correspondences(
+    sampled_depths: torch.Tensor,
+    reference_depths: torch.Tensor,
+    valid_mask: torch.Tensor,
+    *,
+    min_points: int = 16,
+):
+    valid_mask = valid_mask.bool()
+    if int(valid_mask.sum().item()) < min_points:
+        return None
+
+    x = sampled_depths[valid_mask].float()
+    y = reference_depths[valid_mask].float()
+    design = torch.stack([x, torch.ones_like(x)], dim=1)
+    solution = torch.linalg.lstsq(design, y[:, None]).solution[:, 0]
+    beta = solution[0]
+    alpha = solution[1]
+    return alpha, beta, int(valid_mask.sum().item())
+
+
+def _depths_to_world_points_parallel_on_device(
+    depthmap: torch.Tensor,
+    *,
+    world_view_transforms: torch.Tensor,
+    full_proj_transforms: torch.Tensor,
+) -> torch.Tensor:
+    device = depthmap.device
+    dtype = depthmap.dtype
+
+    c2w = (world_view_transforms.transpose(-1, -2)).inverse()
+    width, height = depthmap.shape[-1], depthmap.shape[-2]
+    ndc2pix = torch.tensor(
+        [
+            [width / 2, 0, 0, width / 2],
+            [0, height / 2, 0, height / 2],
+            [0, 0, 0, 1],
+        ],
+        dtype=dtype,
+        device=device,
+    ).T
+    projection_matrix = c2w.transpose(-1, -2) @ full_proj_transforms
+    intrins = (projection_matrix @ ndc2pix)[..., :3, :3].transpose(-1, -2)
+
+    grid_x, grid_y = torch.meshgrid(
+        torch.arange(width, device=device, dtype=dtype),
+        torch.arange(height, device=device, dtype=dtype),
+        indexing="xy",
+    )
+    pixel_points = torch.stack([grid_x, grid_y, torch.ones_like(grid_x)], dim=-1).reshape(-1, 3)
+    rays_d = pixel_points[None] @ intrins.inverse().transpose(-1, -2) @ c2w[..., :3, :3].transpose(-1, -2)
+    rays_o = c2w[..., None, :3, 3]
+    world_points = depthmap.reshape(-1, height * width, 1) * rays_d + rays_o
+    return world_points.reshape(depthmap.shape[0], height, width, 3)
+
+
 def _prepare_reference_depth_maps(scene_pm, sfm_data, scaled_cameras, scale_factor: float) -> torch.Tensor:
     target_height, target_width = scene_pm.points3d.shape[1:3]
     reference_depth_maps = []
@@ -216,6 +272,80 @@ def _print_geometrycrafter_sparse_point_reference_stats(reference_points, scaled
             f"{len(points)} pts | z min/max/mean="
             f"{z.min().item():.4f}/{z.max().item():.4f}/{z.mean().item():.4f}"
         )
+
+
+def _prealign_geometrycrafter_pointmap_to_sparse_reference(
+    scene_pm,
+    scaled_cameras,
+    reference_points,
+    scale_factor: float,
+):
+    charts_prior_pts = scale_factor * scene_pm.points3d
+    pm_h, pm_w = scene_pm.points3d.shape[1:3]
+    charts_prior_depths = torch.cat(
+        [
+            scaled_cameras.p3d_cameras[i_chart]
+            .get_world_to_view_transform()
+            .transform_points(charts_prior_pts[i_chart].reshape(-1, 3))[..., 2]
+            .reshape(1, pm_h, pm_w)
+            for i_chart in range(len(scaled_cameras))
+        ],
+        dim=0,
+    )
+
+    aligned_depths = charts_prior_depths.clone()
+    fit_summaries = []
+    for i_chart in range(len(scaled_cameras)):
+        sparse_points = reference_points[i_chart]
+        sparse_reference_depths = (
+            scaled_cameras.p3d_cameras[i_chart]
+            .get_world_to_view_transform()
+            .transform_points(sparse_points)[..., 2]
+        )
+        sampled_depths, fov_mask = get_points_depth_in_depthmap(
+            pts=sparse_points,
+            depthmap=charts_prior_depths[i_chart],
+            p3d_camera=scaled_cameras.p3d_cameras[i_chart],
+        )
+        valid_mask = (
+            fov_mask
+            & torch.isfinite(sampled_depths)
+            & torch.isfinite(sparse_reference_depths)
+            & (sampled_depths > 0)
+            & (sparse_reference_depths > 0)
+        )
+        fit = _fit_affine_depth_from_sparse_correspondences(
+            sampled_depths=sampled_depths,
+            reference_depths=sparse_reference_depths,
+            valid_mask=valid_mask,
+        )
+        if fit is None:
+            fit_summaries.append((i_chart, None, None, int(valid_mask.sum().item())))
+            continue
+        alpha, beta, valid_count = fit
+        aligned_depths[i_chart] = alpha + beta * charts_prior_depths[i_chart]
+        fit_summaries.append((i_chart, float(alpha.item()), float(beta.item()), valid_count))
+
+    CONSOLE.print("[INFO] GeometryCrafter sparse-depth affine pre-alignment:")
+    for i_chart, alpha, beta, valid_count in fit_summaries:
+        image_name = scaled_cameras.gs_cameras[i_chart].image_name
+        if alpha is None or beta is None:
+            CONSOLE.print(f"  chart {i_chart:03d} {image_name}: skipped (valid sparse samples={valid_count})")
+        else:
+            CONSOLE.print(
+                f"  chart {i_chart:03d} {image_name}: alpha={alpha:.4f} beta={beta:.4f} "
+                f"(valid sparse samples={valid_count})"
+            )
+
+    aligned_pts_scaled = _depths_to_world_points_parallel_on_device(
+        aligned_depths,
+        world_view_transforms=torch.stack([camera.world_view_transform for camera in scaled_cameras.gs_cameras]),
+        full_proj_transforms=torch.stack([camera.full_proj_transform for camera in scaled_cameras.gs_cameras]),
+    )
+    return _clone_pointmap_like(
+        scene_pm,
+        points3d=aligned_pts_scaled / float(scale_factor),
+    )
 
 
 def _prepare_alignment_masks(
@@ -323,7 +453,7 @@ if __name__ == '__main__':
         '--resolution',
         type=int,
         default=1,
-        help='Downsampling factor for align_charts inputs. Use 2 for half-resolution, 4 for quarter-resolution.',
+        help='Accepted for pipeline compatibility. align_charts keeps chart depth/pointmaps at native resolution; image-stage downsampling happens downstream.',
     )
     parser.add_argument(
         '--skip_alignment_optimization',
@@ -450,12 +580,9 @@ if __name__ == '__main__':
         )
 
     if args.resolution != 1:
-        original_chart_height, original_chart_width = scene_pm.points3d.shape[1:3]
-        scene_pm = _downsample_pointmap_for_alignment(scene_pm, args.resolution)
         CONSOLE.print(
-            f"[INFO] align_charts resolution={args.resolution}: "
-            f"chart resolution {original_chart_width}x{original_chart_height} -> "
-            f"{scene_pm.points3d.shape[2]}x{scene_pm.points3d.shape[1]}"
+            f"[INFO] align_charts keeps chart geometry at native resolution; "
+            f"--resolution={args.resolution} only affects downstream image-material loading stages."
         )
     
     # Compute rescaling factor
@@ -474,15 +601,6 @@ if __name__ == '__main__':
     # Rescale cameras
     _pointmap_cameras = rescale_cameras(_pointmap_cameras, _scale_factor)
 
-    charts_prior_pts = _scale_factor * scene_pm.points3d
-    charts_prior_depths = torch.cat([
-        _pointmap_cameras.p3d_cameras[i_chart].get_world_to_view_transform().transform_points(
-            charts_prior_pts[i_chart].reshape(-1, 3)
-        )[..., 2].reshape(1, scene_pm.points3d.shape[1], scene_pm.points3d.shape[2])
-        for i_chart in range(len(_pointmap_cameras))
-    ], dim=0)
-    charts_prior_confs = 4.0 * torch.ones_like(charts_prior_depths)
-    
     # Rescale and prepare reference data based on SFM method
     use_geometrycrafter_alignment_inputs = use_geometrycrafter and args.colmap_scene is not None
     use_geometrycrafter_sparse_point_reference = use_geometrycrafter_alignment_inputs
@@ -493,6 +611,12 @@ if __name__ == '__main__':
             _scale_factor,
         )
         _print_geometrycrafter_sparse_point_reference_stats(reference_data, _pointmap_cameras)
+        scene_pm = _prealign_geometrycrafter_pointmap_to_sparse_reference(
+            scene_pm,
+            _pointmap_cameras,
+            reference_data,
+            _scale_factor,
+        )
         if align_config.get('use_matching_loss'):
             CONSOLE.print("[INFO] Disabling matching loss for GeometryCrafter COLMAP sparse-point alignment reference.")
         align_config['use_matching_loss'] = False
@@ -503,6 +627,15 @@ if __name__ == '__main__':
             _pointmap_cameras,
             _scale_factor,
         )
+
+    charts_prior_pts = _scale_factor * scene_pm.points3d
+    charts_prior_depths = torch.cat([
+        _pointmap_cameras.p3d_cameras[i_chart].get_world_to_view_transform().transform_points(
+            charts_prior_pts[i_chart].reshape(-1, 3)
+        )[..., 2].reshape(1, scene_pm.points3d.shape[1], scene_pm.points3d.shape[2])
+        for i_chart in range(len(_pointmap_cameras))
+    ], dim=0)
+    charts_prior_confs = 4.0 * torch.ones_like(charts_prior_depths)
 
     alignment_masks = _prepare_alignment_masks(
         scene_pm=scene_pm,

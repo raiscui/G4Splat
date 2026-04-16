@@ -438,6 +438,7 @@ class ParallelAligner(torch.nn.Module):
     def loss(self, reference_depths, pred_depths, masks=None):
         if self.using_pts_as_reference:
             reference_pts_deformed_depths = []
+            reference_pts_valid_masks = []
             for i_depth in range(self.n_pm):
                 reference_pts_deformed_depth_i, fov_mask = get_points_depth_in_depthmap(
                     pts=self.reference_pts[i_depth], 
@@ -445,12 +446,18 @@ class ParallelAligner(torch.nn.Module):
                     p3d_camera=self.cameras.p3d_cameras[i_depth]
                 )
                 reference_pts_deformed_depths.append(reference_pts_deformed_depth_i)
+                reference_pts_valid_masks.append(fov_mask)
             reference_pts_deformed_depths = torch.cat(reference_pts_deformed_depths, dim=0).flatten()
+            reference_pts_valid_masks = torch.cat(reference_pts_valid_masks, dim=0).flatten()
             diff = reference_pts_deformed_depths - reference_depths
         else:
             diff = pred_depths - reference_depths
         
         diff = diff.abs()  # TODO: Should we divide by reference_depths.median()?
+        if self.using_pts_as_reference:
+            diff = diff[reference_pts_valid_masks]
+            if diff.numel() == 0:
+                return pred_depths.sum() * 0.
         
         if self.use_learnable_confidence:
             confidence = self.confidence
@@ -465,6 +472,7 @@ class ParallelAligner(torch.nn.Module):
                     )
                     reference_pts_confidence.append(reference_pts_confidence_i)
                 confidence = torch.cat(reference_pts_confidence, dim=0).flatten()
+                confidence = confidence[reference_pts_valid_masks]
             
             diff = confidence * diff - self.confidence_weighting * torch.log(confidence)
         

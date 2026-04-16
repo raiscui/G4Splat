@@ -1,3 +1,5 @@
+pixi run python scripts/vis_depth.py data/g4/nt6_sr_sm13-2/mast3r_sfm/render-dense-train-views/dense-render/depth_frame000000.tiff
+
 python train.py -s data/denseview/scan1 -o output/denseview/scan1 --sfm_config posed --use_view_config --config_view_num 20  --tetra_downsample_ratio 0.25 --use_dense_view
 
 ```bash
@@ -35,7 +37,7 @@ pixi run python scripts/generate_view_split.py \
 ```bash
 CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
 -s /autodl-fs/data/fastgs/nt1_sr \
--o data/g4/nt1_sr_sm13-2 \
+-o data/g4/nt1_sr_sm14 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -50,22 +52,16 @@ CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
 --export_workers 16 \
 --skip_render_all_img \
 --geometrycrafter_parallel_sequences 2 \
---free_gaussians_config dense_compact_sm13   --dense_regul weak
+--free_gaussians_config dense_compact_sm14
 
 
 --geometrycrafter_height 384 \
 --geometrycrafter_width 640 \
 
-  CUDA_VISIBLE_DEVICES=0 pixi run python scripts/extract_tetra_mesh.py \
-    --mast3r_scene data/g4/nt1_sr_sm13-2/mast3r_sfm \
-    --model_path data/g4/nt1_sr_sm13-2/free_gaussians \
-    --output_path data/g4/nt1_sr_sm13-2/tetra_meshes \
-    --config default \
-    --downsample_ratio 0.25
 
 CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 -s /autodl-fs/data/fastgs/nt6_sr \
--o data/g4/nt6_sr_sm13-2 \
+-o data/g4/nt6_sr_sm14 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -80,7 +76,7 @@ CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 --export_workers 16 \
 --skip_render_all_img \
 --geometrycrafter_parallel_sequences 2 \
---free_gaussians_config dense_compact_sm13   --dense_regul weak
+--free_gaussians_config dense_compact_sm14
 
 
 

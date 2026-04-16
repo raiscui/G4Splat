@@ -16,6 +16,7 @@ from matcha.pointmap.base import PointMap
 from matcha.dm_trainers.charts_alignment import save_charts_data_npz
 from scripts.align_charts import (
     _downsample_pointmap_for_alignment,
+    _fit_affine_depth_from_sparse_correspondences,
     _prepare_alignment_masks,
     _prepare_geometrycrafter_reference_depth_maps,
     _prepare_geometrycrafter_reference_point_clouds,
@@ -276,6 +277,33 @@ class AlignChartsResolutionTests(unittest.TestCase):
 
         self.assertFalse(safe)
         self.assertGreater(pairwise_elements, DEFAULT_MATCHING_MAX_PAIRWISE_ELEMENTS)
+
+    def test_fit_affine_depth_from_sparse_correspondences_recovers_linear_map(self):
+        sampled_depths = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float32)
+        reference_depths = 1.5 + 7.0 * sampled_depths
+        valid_mask = torch.tensor([True, True, True, True])
+
+        fit = _fit_affine_depth_from_sparse_correspondences(
+            sampled_depths=sampled_depths,
+            reference_depths=reference_depths,
+            valid_mask=valid_mask,
+            min_points=2,
+        )
+
+        self.assertIsNotNone(fit)
+        alpha, beta, valid_count = fit
+        self.assertAlmostEqual(float(alpha), 1.5, places=5)
+        self.assertAlmostEqual(float(beta), 7.0, places=5)
+        self.assertEqual(valid_count, 4)
+
+    def test_fit_affine_depth_from_sparse_correspondences_requires_enough_points(self):
+        fit = _fit_affine_depth_from_sparse_correspondences(
+            sampled_depths=torch.tensor([1.0, 2.0], dtype=torch.float32),
+            reference_depths=torch.tensor([3.0, 5.0], dtype=torch.float32),
+            valid_mask=torch.tensor([True, False]),
+            min_points=2,
+        )
+        self.assertIsNone(fit)
 
     def test_downsample_pointmap_for_alignment_scales_spatial_maps_and_focals(self):
         scene_pm = PointMap(
