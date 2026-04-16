@@ -14,6 +14,65 @@ from matcha.dm_scene.cameras import CamerasWrapper, create_gs_cameras_from_point
 from matcha.pointmap.mast3r import load_mast3r_matches
 
 
+def _tensor_stats(tensor: torch.Tensor) -> dict[str, float]:
+    tensor = tensor.detach().float()
+    finite = tensor[torch.isfinite(tensor)]
+    if finite.numel() == 0:
+        return {"min": float("nan"), "max": float("nan"), "mean": float("nan"), "median": float("nan")}
+    return {
+        "min": float(finite.min().item()),
+        "max": float(finite.max().item()),
+        "mean": float(finite.mean().item()),
+        "median": float(finite.median().item()),
+    }
+
+
+def _print_chart_alignment_diagnostics(reference_data, initial_depths, output_depths):
+    print("\n===== Chart Diagnostics =====")
+    for i_chart in range(initial_depths.shape[0]):
+        initial_stats = _tensor_stats(initial_depths[i_chart])
+        output_stats = _tensor_stats(output_depths[i_chart])
+        line = (
+            f"[chart {i_chart:03d}] "
+            f"initial depth min/max/mean={initial_stats['min']:.4f}/{initial_stats['max']:.4f}/{initial_stats['mean']:.4f} "
+            f"-> output {output_stats['min']:.4f}/{output_stats['max']:.4f}/{output_stats['mean']:.4f}"
+        )
+        if isinstance(reference_data, list):
+            ref_points = reference_data[i_chart]
+            ref_stats = _tensor_stats(ref_points[:, 2])
+            line += (
+                f" | sparse_pts={len(ref_points)} "
+                f"sparse_depth min/max/mean={ref_stats['min']:.4f}/{ref_stats['max']:.4f}/{ref_stats['mean']:.4f}"
+            )
+        else:
+            ref_stats = _tensor_stats(reference_data[i_chart])
+            line += (
+                f" | ref_depth min/max/mean={ref_stats['min']:.4f}/{ref_stats['max']:.4f}/{ref_stats['mean']:.4f}"
+            )
+        print(line)
+
+
+def save_charts_data_npz(
+    *,
+    charts_data_path,
+    prior_depths,
+    depths,
+    pts,
+    confs,
+    scale_factor,
+):
+    save_path = os.path.join(charts_data_path, "charts_data.npz")
+    print(f"[INFO] Saving charts data to {save_path}")
+    np.savez(
+        save_path,
+        prior_depths=prior_depths.cpu().numpy(),
+        depths=depths.cpu().numpy(),
+        pts=pts.cpu().numpy(),
+        confs=confs.cpu().numpy(),
+        scale_factor=scale_factor,
+    )
+
+
 # TODO: Update the default values of the parameters
 def align_charts_in_parallel(
     # Scene
@@ -192,6 +251,9 @@ def align_charts_in_parallel(
         output_verts[i_chart].reshape(-1, 3)
     )[..., 2].reshape(1, pm_h, pm_w) for i_chart in range(len(pa.cameras))
     ], dim=0)
+
+    if verbose:
+        _print_chart_alignment_diagnostics(reference_data, initial_depths, output_depths)
     
     if use_learnable_confidence:
         with torch.no_grad():
@@ -200,23 +262,13 @@ def align_charts_in_parallel(
         output_confs = 4. * torch.ones_like(output_depths)
     
     if save_charts_data:
-        save_path = os.path.join(charts_data_path, "charts_data.npz")
-        
-        print(f"[INFO] Saving charts data to {save_path}")
-        charts_prior_depths = initial_depths
-        charts_depths = output_depths
-        charts_pts = output_verts
-        charts_confs = output_confs
-        charts_scale_factor = scale_factor
-
-        # Save the charts data with numpy
-        np.savez(
-            save_path,
-            prior_depths=charts_prior_depths.cpu().numpy(),
-            depths=charts_depths.cpu().numpy(),
-            pts=charts_pts.cpu().numpy(),
-            confs=charts_confs.cpu().numpy(),
-            scale_factor=charts_scale_factor,
+        save_charts_data_npz(
+            charts_data_path=charts_data_path,
+            prior_depths=initial_depths,
+            depths=output_depths,
+            pts=output_verts,
+            confs=output_confs,
+            scale_factor=scale_factor,
         )
     
     if use_learnable_confidence:

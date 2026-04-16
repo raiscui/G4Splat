@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
+from pathlib import Path
 
+import numpy as np
 import torch
 
 from matcha.dm_modules.matching_limits import (
@@ -10,6 +13,7 @@ from matcha.dm_modules.matching_limits import (
     matching_loss_is_safe,
 )
 from matcha.pointmap.base import PointMap
+from matcha.dm_trainers.charts_alignment import save_charts_data_npz
 from scripts.align_charts import (
     _downsample_pointmap_for_alignment,
     _prepare_alignment_masks,
@@ -295,6 +299,25 @@ class AlignChartsResolutionTests(unittest.TestCase):
         self.assertEqual(tuple(resized.masks.shape), (1, 2, 3))
         self.assertTrue(torch.equal(resized.poses, scene_pm.poses))
         self.assertTrue(torch.allclose(resized.focals, torch.tensor([[6.0, 9.0]], dtype=torch.float32)))
+
+    def test_save_charts_data_npz_writes_expected_arrays(self):
+        with tempfile.TemporaryDirectory(prefix="align-charts-save-") as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            save_charts_data_npz(
+                charts_data_path=str(tmp_path),
+                prior_depths=torch.ones((1, 2, 3), dtype=torch.float32),
+                depths=torch.full((1, 2, 3), 2.0, dtype=torch.float32),
+                pts=torch.full((1, 2, 3, 3), 3.0, dtype=torch.float32),
+                confs=torch.full((1, 2, 3), 4.0, dtype=torch.float32),
+                scale_factor=0.5,
+            )
+
+            data = np.load(tmp_path / "charts_data.npz")
+            self.assertEqual(tuple(data["prior_depths"].shape), (1, 2, 3))
+            self.assertEqual(tuple(data["depths"].shape), (1, 2, 3))
+            self.assertEqual(tuple(data["pts"].shape), (1, 2, 3, 3))
+            self.assertEqual(tuple(data["confs"].shape), (1, 2, 3))
+            self.assertAlmostEqual(float(data["scale_factor"]), 0.5)
 
 
 if __name__ == "__main__":

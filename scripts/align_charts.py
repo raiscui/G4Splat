@@ -10,7 +10,7 @@ import yaml
 
 from matcha.pointmap.depthanythingv2 import get_pointmap_from_mast3r_scene_with_depthanything
 from matcha.dm_scene.cameras import CamerasWrapper, rescale_cameras, create_gs_cameras_from_pointmap
-from matcha.dm_trainers.charts_alignment import align_charts_in_parallel
+from matcha.dm_trainers.charts_alignment import align_charts_in_parallel, save_charts_data_npz
 
 from rich.console import Console
 
@@ -206,6 +206,18 @@ def _prepare_geometrycrafter_reference_point_clouds(sfm_data, scaled_cameras, sc
     return reference_points
 
 
+def _print_geometrycrafter_sparse_point_reference_stats(reference_points, scaled_cameras):
+    CONSOLE.print("[INFO] GeometryCrafter sparse-point reference stats:")
+    for i_chart, points in enumerate(reference_points):
+        image_name = scaled_cameras.gs_cameras[i_chart].image_name
+        z = points[:, 2].detach().float()
+        CONSOLE.print(
+            f"  chart {i_chart:03d} {image_name}: "
+            f"{len(points)} pts | z min/max/mean="
+            f"{z.min().item():.4f}/{z.max().item():.4f}/{z.mean().item():.4f}"
+        )
+
+
 def _prepare_alignment_masks(
     *,
     scene_pm,
@@ -312,6 +324,11 @@ if __name__ == '__main__':
         type=int,
         default=1,
         help='Downsampling factor for align_charts inputs. Use 2 for half-resolution, 4 for quarter-resolution.',
+    )
+    parser.add_argument(
+        '--skip_alignment_optimization',
+        action='store_true',
+        help='Skip the align_charts optimization step and directly export the current chart prior as charts_data.npz.',
     )
     
     args = parser.parse_args()
@@ -456,6 +473,15 @@ if __name__ == '__main__':
     
     # Rescale cameras
     _pointmap_cameras = rescale_cameras(_pointmap_cameras, _scale_factor)
+
+    charts_prior_pts = _scale_factor * scene_pm.points3d
+    charts_prior_depths = torch.cat([
+        _pointmap_cameras.p3d_cameras[i_chart].get_world_to_view_transform().transform_points(
+            charts_prior_pts[i_chart].reshape(-1, 3)
+        )[..., 2].reshape(1, scene_pm.points3d.shape[1], scene_pm.points3d.shape[2])
+        for i_chart in range(len(_pointmap_cameras))
+    ], dim=0)
+    charts_prior_confs = 4.0 * torch.ones_like(charts_prior_depths)
     
     # Rescale and prepare reference data based on SFM method
     use_geometrycrafter_alignment_inputs = use_geometrycrafter and args.colmap_scene is not None
@@ -466,6 +492,7 @@ if __name__ == '__main__':
             _pointmap_cameras,
             _scale_factor,
         )
+        _print_geometrycrafter_sparse_point_reference_stats(reference_data, _pointmap_cameras)
         if align_config.get('use_matching_loss'):
             CONSOLE.print("[INFO] Disabling matching loss for GeometryCrafter COLMAP sparse-point alignment reference.")
         align_config['use_matching_loss'] = False
@@ -487,6 +514,21 @@ if __name__ == '__main__':
         CONSOLE.print(f"[INFO] {alignment_masks.sum()} points in masks.")
     else:
         CONSOLE.print("[INFO] All points will be used for charts alignment.")
+
+    if args.skip_alignment_optimization:
+        CONSOLE.print("[INFO] Skipping align_charts optimization and exporting GeometryCrafter prior charts_data directly.")
+        save_charts_data_npz(
+            charts_data_path=args.output_path,
+            prior_depths=charts_prior_depths,
+            depths=charts_prior_depths,
+            pts=charts_prior_pts,
+            confs=charts_prior_confs,
+            scale_factor=_scale_factor,
+        )
+        CONSOLE.print("\nInitialization complete!")
+        CONSOLE.print("Output vertices shape:", charts_prior_pts.shape)
+        CONSOLE.print("Output depths shape:", charts_prior_depths.shape)
+        sys.exit(0)
     
     # Align the charts
     output = align_charts_in_parallel(
