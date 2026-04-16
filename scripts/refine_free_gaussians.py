@@ -32,6 +32,7 @@ if __name__ == '__main__':
     # Scene arguments
     parser.add_argument('-s', '--mast3r_scene', type=str, required=True)
     parser.add_argument('-o', '--output_path', type=str, default=None)
+    parser.add_argument('--camera_source_path', type=str, default=None)
     parser.add_argument('--white_background', type=bool, default=False)
     
     # For dense RGB and depth supervision from a COLMAP dataset (optional)
@@ -100,6 +101,7 @@ if __name__ == '__main__':
             "--dense_regul", args.dense_regul,
             "--refine_depth_path", args.refine_depth_path,
         ]
+        append_optional_arg(command_parts, "--camera_source_path", args.camera_source_path)
         if dense_arg:
             command_parts.extend(dense_arg.split())
 

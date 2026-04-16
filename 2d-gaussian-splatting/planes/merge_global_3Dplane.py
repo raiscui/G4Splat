@@ -8,6 +8,7 @@ import numpy as np
 from argparse import ArgumentParser
 from arguments import ModelParams
 from scene.dataset_readers import load_cameras
+from utils.camera_subset_utils import filter_cameras_to_artifact_subset
 from utils.general_utils import safe_state
 from guidance.cam_utils import get_covisible_points, project_points_to_image
 from guidance.cam_utils import get_pixel_to_points_tensor, get_visible_points_mask
@@ -273,6 +274,7 @@ if __name__ == "__main__":
         choices=["cpu", "cuda"],
         help="Device for global plane merging tensors.",
     )
+    parser.add_argument("--artifact_source_path", type=str, default=None)
     model = ModelParams(parser, sentinel=True)
     args = parser.parse_args()
 
@@ -294,6 +296,7 @@ if __name__ == "__main__":
         )
     else:
         train_viewpoints, _ = load_cameras(camera_args)
+    train_viewpoints = filter_cameras_to_artifact_subset(train_viewpoints, args.artifact_source_path)
 
     if args.see3d_root_path is not None:
         camera_path = os.path.join(args.see3d_root_path, 'see3d_cameras.npz')

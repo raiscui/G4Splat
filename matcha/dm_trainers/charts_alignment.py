@@ -43,6 +43,7 @@ def align_charts_in_parallel(
     use_reprojection_loss=False,
     matching_thr_factor=1./20.,
     matching_update_iters=None,
+    matching_max_pairwise_elements=None,
     use_confidence_in_matching_loss=False,
     weight_encodings_with_confidence=False,
     regularize_chart_encodings_norms=False,
@@ -165,6 +166,7 @@ def align_charts_in_parallel(
         matching_thr=matching_thr,
         use_confidence_in_matching_loss=use_confidence_in_matching_loss,
         matching_update_iters=matching_update_iters,
+        matching_max_pairwise_elements=matching_max_pairwise_elements,
         gradient_loss_weight=gradient_loss_weight,
         hessian_loss_weight=hessian_loss_weight,
         normal_loss_weight=normal_loss_weight,
@@ -228,4 +230,3 @@ def align_charts_in_parallel(
         else:
             return output_verts, output_depths
         
-

@@ -92,6 +92,10 @@ def get_interpolated_value_from_pixel_coordinates(
     """
     height, width = value_img.shape[:2]
     n_points = pix_coords.shape[0]
+
+    if n_points == 0:
+        n_channels = 1 if value_img.ndim == 2 else value_img.shape[-1]
+        return torch.empty((0, n_channels), device=value_img.device, dtype=value_img.dtype)
     
     # Scale and shift pixel coordinates to the range [-1, 1]
     factors = 0.5 * torch.tensor([[width-1, height-1]], dtype=torch.float32).to(pix_coords.device)  # (1, 2)

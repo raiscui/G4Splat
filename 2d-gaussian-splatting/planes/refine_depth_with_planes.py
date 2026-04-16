@@ -5,6 +5,7 @@ sys.path.append(os.getcwd())
 sys.path.append(os.path.join(os.getcwd(), '2d-gaussian-splatting'))
 from scene.dataset_readers import load_see3d_cameras
 from scene.dataset_readers import load_cameras
+from utils.camera_subset_utils import filter_cameras_to_artifact_subset
 from utils.general_utils import safe_state
 from utils.render_utils import save_img_f32, save_img_u8
 from argparse import ArgumentParser
@@ -173,16 +174,8 @@ class GeneralPlaneRegressor(BaseEstimator, RegressorMixin):
             return np.array([0, 0, 1]), 0
         
         normal = np.array([a, b, c]) / normal_norm
-        if abs(c) > 1e-5:
-            z_offset = -1.0 * d / c
-            center = np.array([0, 0, z_offset])
-        else:
-            if abs(b) > 1e-5:
-                y_offset = -1.0 * d / b
-                center = np.array([0, y_offset, 0])
-            else:
-                x_offset = -1.0 * d / a
-                center = np.array([x_offset, 0, 0])
+        d_normalized = d / normal_norm
+        center = -d_normalized * normal
 
         return normal, center
 
@@ -244,7 +237,7 @@ def normals_cluster_1d(valid_normals_1d, n_init_clusters=8, n_clusters=6, min_si
     
     return cluster_masks, np.array(cluster_centers)
 
-def compute_plane_aligned_depth(plane_normal, plane_center, camera, img_shape):
+def compute_plane_aligned_depth(plane_normal, plane_center, camera, img_shape, min_ray_plane_dot=0.05):
     """
     Compute depth map by intersecting camera rays with 3D plane
     
@@ -294,12 +287,12 @@ def compute_plane_aligned_depth(plane_normal, plane_center, camera, img_shape):
     n_dot_d = torch.sum(plane_normal * ray_dirs_world, dim=-1)  # (H, W)
     n_dot_pc_minus_o = torch.sum(plane_normal * (plane_center - camera_center), dim=-1)  # (H, W)
     
-    # Avoid division by zero (rays parallel to plane)
-    eps = 1e-8
-    n_dot_d = torch.clamp(torch.abs(n_dot_d), min=eps) * torch.sign(n_dot_d)
+    # Ignore rays that are close to parallel to the plane to avoid unstable depth explosions
+    valid_ray_mask = torch.abs(n_dot_d) > min_ray_plane_dot
+    safe_n_dot_d = torch.where(valid_ray_mask, n_dot_d, torch.ones_like(n_dot_d))
     
     # Compute intersection parameter t
-    t = n_dot_pc_minus_o / n_dot_d  # (H, W)
+    t = n_dot_pc_minus_o / safe_n_dot_d  # (H, W)
     
     # Compute intersection points
     intersection_points = camera_center + t.unsqueeze(-1) * ray_dirs_world  # (H, W, 3)
@@ -318,12 +311,49 @@ def compute_plane_aligned_depth(plane_normal, plane_center, camera, img_shape):
     aligned_depth = intersection_points_cam[..., 2]  # (H, W) - z coordinate in camera space
     
     # Handle invalid intersections (behind camera or negative depth)
-    valid_mask = (t > 0) & (aligned_depth > 0)
+    valid_mask = valid_ray_mask & (t > 0) & (aligned_depth > 0) & torch.isfinite(aligned_depth)
     aligned_depth[~valid_mask] = 0
-
-    valid_intersection_points = intersection_points[valid_mask]
     
-    return aligned_depth, valid_intersection_points
+    return aligned_depth, valid_mask
+
+
+def should_apply_aligned_depth(
+    original_depth: torch.Tensor,
+    aligned_depth: torch.Tensor,
+    eval_mask: torch.Tensor,
+    *,
+    min_eval_pixels: int = 1024,
+    min_corr: float = 0.98,
+    max_median_rel_error: float = 0.05,
+):
+    eval_count = int(eval_mask.sum().item())
+    if eval_count < min_eval_pixels:
+        return False, {"reason": "too_few_pixels", "eval_count": eval_count}
+
+    orig = original_depth[eval_mask].float()
+    aligned = aligned_depth[eval_mask].float()
+    finite_mask = torch.isfinite(orig) & torch.isfinite(aligned) & (orig > 0) & (aligned > 0)
+    finite_count = int(finite_mask.sum().item())
+    if finite_count < min_eval_pixels:
+        return False, {"reason": "too_few_finite_pixels", "eval_count": finite_count}
+
+    orig = orig[finite_mask]
+    aligned = aligned[finite_mask]
+    rel_error = (orig - aligned).abs() / torch.clamp_min(orig.abs(), 1e-6)
+    median_rel_error = float(torch.median(rel_error).item())
+
+    orig_centered = orig - orig.mean()
+    aligned_centered = aligned - aligned.mean()
+    denom = torch.sqrt((orig_centered.square().sum()) * (aligned_centered.square().sum()))
+    corr = 0.0 if denom <= 1e-12 else float((orig_centered * aligned_centered).sum().item() / denom.item())
+
+    is_valid = corr >= min_corr and median_rel_error <= max_median_rel_error
+    return is_valid, {
+        "reason": "ok" if is_valid else "quality_gate_failed",
+        "eval_count": finite_count,
+        "corr": corr,
+        "median_rel_error": median_rel_error,
+    }
 
 def create_overlay_visualization(rgb_image, mask_obj, transparency=0.6, color=[0, 0, 255]):
     """
@@ -476,6 +506,7 @@ if __name__ == "__main__":
     model = ModelParams(parser, sentinel=True)
     parser.add_argument("--plane_root_path", required=True, type=str)
     parser.add_argument("--see3d_root_path", type=str, default=None)
+    parser.add_argument("--artifact_source_path", type=str, default=None)
     args = parser.parse_args()
 
     print('NOTE: Using training views from data_path')
@@ -483,6 +514,7 @@ if __name__ == "__main__":
     safe_state(False)
 
     train_viewpoints, _ = load_cameras(model.extract(args))
+    train_viewpoints = filter_cameras_to_artifact_subset(train_viewpoints, args.artifact_source_path)
     input_view_num = len(train_viewpoints)
 
     if args.see3d_root_path is not None:
@@ -609,12 +641,30 @@ if __name__ == "__main__":
             conf_map = conf_map_list[view_id]
             mask = (plane_mask == plane_id).astype(np.float32)
             mask = (mask > 0.5)
+            original_depth = depth_list[view_id].clone()
 
-            aligned_depth, valid_intersection_points = compute_plane_aligned_depth(global_3Dplane_normal, global_3Dplane_center, train_viewpoints[view_id], depth_list[view_id].shape)
+            aligned_depth, aligned_valid_mask = compute_plane_aligned_depth(
+                global_3Dplane_normal,
+                global_3Dplane_center,
+                train_viewpoints[view_id],
+                depth_list[view_id].shape,
+            )
             
             # replace depth use aligned depth in mask region
             mask = torch.from_numpy(mask).to('cuda')
-            depth_list[view_id][mask] = aligned_depth[mask]
+            replace_mask = mask & aligned_valid_mask
+            apply_aligned_depth, gate_stats = should_apply_aligned_depth(
+                original_depth=original_depth,
+                aligned_depth=aligned_depth,
+                eval_mask=replace_mask & torch.from_numpy(conf_map).to('cuda'),
+            )
+            if not apply_aligned_depth:
+                print(
+                    f"[INFO] Skip aligned depth replacement for view {view_id} plane {plane_id}: "
+                    f"{gate_stats}"
+                )
+                continue
+            depth_list[view_id][replace_mask] = aligned_depth[replace_mask]
 
     # refine non-plane region for see3d views
     for view_id in range(len(train_viewpoints)):
@@ -652,5 +702,3 @@ if __name__ == "__main__":
         print(f'refine points saved to {os.path.join(data_path, f"refine_points_frame{view_id:06d}.ply")}')
     
     print('done')
-
-

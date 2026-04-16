@@ -35,7 +35,7 @@ pixi run python scripts/generate_view_split.py \
 ```bash
 CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
 -s /autodl-fs/data/fastgs/nt1_sr \
--o data/g4/nt1_sr_sm13 \
+-o data/g4/nt1_sr_sm13-2 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -53,9 +53,19 @@ CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
 --free_gaussians_config dense_compact_sm13   --dense_regul weak
 
 
+--geometrycrafter_height 384 \
+--geometrycrafter_width 640 \
+
+  CUDA_VISIBLE_DEVICES=0 pixi run python scripts/extract_tetra_mesh.py \
+    --mast3r_scene data/g4/nt1_sr_sm13-2/mast3r_sfm \
+    --model_path data/g4/nt1_sr_sm13-2/free_gaussians \
+    --output_path data/g4/nt1_sr_sm13-2/tetra_meshes \
+    --config default \
+    --downsample_ratio 0.25
+
 CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 -s /autodl-fs/data/fastgs/nt6_sr \
--o data/g4/nt6_sr_sm13 \
+-o data/g4/nt6_sr_sm13-2 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -16,6 +18,7 @@ from matcha.pointmap.geometrycrafter import (
     _build_geometrycrafter_pointmap,
     _resolve_geometrycrafter_processing_resolution,
     build_interleaved_view_sequences,
+    get_pointmap_from_colmap_scene_with_geometrycrafter,
     parse_view_order,
 )
 
@@ -314,6 +317,186 @@ class GeometryCrafterHelperTests(unittest.TestCase):
         self.assertEqual(tuple(scene_pm.points3d[0].shape), (4, 5, 3))
         self.assertEqual(tuple(scene_pm.images[0].shape), (4, 5, 3))
         self.assertEqual(tuple(scene_pm.original_images[0].shape), (4, 5, 3))
+
+    @mock.patch("matcha.pointmap.geometrycrafter.run_geometrycrafter_sidecar_from_sfm_data")
+    @mock.patch("matcha.pointmap.geometrycrafter.load_colmap_scene")
+    def test_get_pointmap_from_colmap_scene_with_geometrycrafter_uses_colmap_anchors(
+        self,
+        mock_load_colmap_scene,
+        mock_run_geometrycrafter_sidecar_from_sfm_data,
+    ):
+        image_dir = self.root / "images"
+        image_dir.mkdir()
+        self._write_rgb(str(Path("images") / "000000.png"), 10)
+
+        training_cameras = _FakeCameraSet([_FakeCamera("000000.png", 30, height=8, width=10)])
+        pointmap_cameras = _FakeCameraSet([_FakeCamera("000000.png", 20, height=4, width=5)])
+        test_cameras = _FakeCameraSet([])
+        sfm_xyz = torch.zeros((3, 3), dtype=torch.float32)
+        sfm_col = torch.zeros((3, 3), dtype=torch.float32)
+        image_sfm_points = {"000000": torch.arange(3, dtype=torch.long)}
+
+        mock_load_colmap_scene.side_effect = [
+            {
+                "training_cameras": training_cameras,
+                "test_cameras": test_cameras,
+                "sfm_xyz": sfm_xyz,
+                "sfm_col": sfm_col,
+                "image_sfm_points": image_sfm_points,
+            },
+            {
+                "training_cameras": pointmap_cameras,
+                "test_cameras": test_cameras,
+                "sfm_xyz": sfm_xyz,
+                "sfm_col": sfm_col,
+                "image_sfm_points": image_sfm_points,
+            },
+        ]
+
+        fake_scene_pm = mock.Mock()
+        fake_scene_pm.metadata = {"cache_root": str(self.root / "geometrycrafter_sidecar")}
+        cache_dir = self.root / "gc_cache" / "view_00_src_00"
+        cache_dir.mkdir(parents=True)
+        fake_entry = GeometryCrafterCacheEntry(
+            sequence=GeometryCrafterSequence(
+                view_slot=0,
+                source_view_id=0,
+                frames=(),
+            ),
+            video_path=cache_dir / "view_00.mp4",
+            npz_path=cache_dir / "view_00.npz",
+            manifest_path=cache_dir / "manifest.json",
+            cache_dir=cache_dir,
+        )
+        mock_run_geometrycrafter_sidecar_from_sfm_data.return_value = (fake_scene_pm, [fake_entry])
+
+        scene_pm, sfm_data = get_pointmap_from_colmap_scene_with_geometrycrafter(
+            colmap_source_path=str(self.root),
+            scene_source_path=str(self.root),
+            geometrycrafter_root="/tmp/GeometryCrafter",
+            geometrycrafter_num_views=1,
+            geometrycrafter_view_order=(0,),
+            geometrycrafter_args={"height": 576, "width": 1024},
+            return_sfm_data=True,
+            device="cpu",
+        )
+
+        self.assertIs(scene_pm, fake_scene_pm)
+        self.assertEqual(len(sfm_data["training_cameras"].gs_cameras), 1)
+        self.assertEqual(len(sfm_data["pointmap_cameras"].gs_cameras), 1)
+        self.assertEqual(sfm_data["training_cameras"].gs_cameras[0].image_name, "000000.png")
+        self.assertEqual(sfm_data["pointmap_cameras"].gs_cameras[0].image_name, "000000.png")
+        self.assertTrue(scene_pm.metadata["cache_root"].endswith("geometrycrafter_sidecar"))
+        self.assertTrue(scene_pm.metadata["cache_key"])
+        self.assertFalse(scene_pm.metadata["sidecar_only"])
+
+        self.assertEqual(mock_load_colmap_scene.call_count, 2)
+        _, kwargs = mock_run_geometrycrafter_sidecar_from_sfm_data.call_args
+        self.assertEqual(len(kwargs["training_cameras"].gs_cameras), 1)
+        self.assertEqual(len(kwargs["pointmap_cameras"].gs_cameras), 1)
+        self.assertEqual(kwargs["training_cameras"].gs_cameras[0].image_name, "000000.png")
+        self.assertEqual(kwargs["pointmap_cameras"].gs_cameras[0].image_name, "000000.png")
+        self.assertEqual(kwargs["image_dir"], image_dir)
+
+    @mock.patch("matcha.pointmap.geometrycrafter.run_geometrycrafter_sidecar_from_sfm_data")
+    @mock.patch("matcha.pointmap.geometrycrafter.load_colmap_scene")
+    def test_get_pointmap_from_colmap_scene_with_geometrycrafter_prefers_scene_camera_subset(
+        self,
+        mock_load_colmap_scene,
+        mock_run_geometrycrafter_sidecar_from_sfm_data,
+    ):
+        image_dir = self.root / "images"
+        image_dir.mkdir()
+        self._write_rgb(str(Path("images") / "000000.png"), 10)
+        self._write_rgb(str(Path("images") / "000001.png"), 20)
+        self._write_rgb(str(Path("images") / "000002.png"), 30)
+
+        scene_subset_root = self.root / "mast3r_sfm"
+        scene_subset_root.mkdir()
+        scene_subset_images_dir = scene_subset_root / "images"
+        scene_subset_images_dir.mkdir()
+        with open(scene_subset_root / "cameras.json", "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "filepaths": [
+                        str(scene_subset_root / "images" / "000000.png"),
+                        str(scene_subset_root / "images" / "000002.png"),
+                    ]
+                },
+                handle,
+            )
+
+        training_cameras = _FakeCameraSet(
+            [
+                _FakeCamera("000000.png", 10, height=8, width=10),
+                _FakeCamera("000001.png", 20, height=8, width=10),
+                _FakeCamera("000002.png", 30, height=8, width=10),
+            ]
+        )
+        pointmap_cameras = _FakeCameraSet(
+            [
+                _FakeCamera("000000.png", 10, height=4, width=5),
+                _FakeCamera("000001.png", 20, height=4, width=5),
+                _FakeCamera("000002.png", 30, height=4, width=5),
+            ]
+        )
+        test_cameras = _FakeCameraSet([])
+        sfm_xyz = torch.zeros((3, 3), dtype=torch.float32)
+        sfm_col = torch.zeros((3, 3), dtype=torch.float32)
+        image_sfm_points = {"000000": torch.arange(3), "000001": torch.arange(3), "000002": torch.arange(3)}
+
+        mock_load_colmap_scene.side_effect = [
+            {
+                "training_cameras": training_cameras,
+                "test_cameras": test_cameras,
+                "sfm_xyz": sfm_xyz,
+                "sfm_col": sfm_col,
+                "image_sfm_points": image_sfm_points,
+            },
+            {
+                "training_cameras": pointmap_cameras,
+                "test_cameras": test_cameras,
+                "sfm_xyz": sfm_xyz,
+                "sfm_col": sfm_col,
+                "image_sfm_points": image_sfm_points,
+            },
+        ]
+
+        fake_scene_pm = mock.Mock()
+        fake_scene_pm.metadata = {"cache_root": str(self.root / "geometrycrafter_sidecar")}
+        cache_dir = self.root / "gc_cache" / "view_00_src_00"
+        cache_dir.mkdir(parents=True)
+        fake_entry = GeometryCrafterCacheEntry(
+            sequence=GeometryCrafterSequence(
+                view_slot=0,
+                source_view_id=0,
+                frames=(),
+            ),
+            video_path=cache_dir / "view_00.mp4",
+            npz_path=cache_dir / "view_00.npz",
+            manifest_path=cache_dir / "manifest.json",
+            cache_dir=cache_dir,
+        )
+        mock_run_geometrycrafter_sidecar_from_sfm_data.return_value = (fake_scene_pm, [fake_entry])
+
+        get_pointmap_from_colmap_scene_with_geometrycrafter(
+            colmap_source_path=str(self.root),
+            scene_source_path=str(scene_subset_root),
+            image_indices=[0, 2],
+            geometrycrafter_root="/tmp/GeometryCrafter",
+            geometrycrafter_num_views=1,
+            geometrycrafter_view_order=(0,),
+            geometrycrafter_args={"height": 576, "width": 1024},
+            return_sfm_data=True,
+            device="cpu",
+        )
+
+        _, kwargs = mock_run_geometrycrafter_sidecar_from_sfm_data.call_args
+        self.assertEqual([cam.image_name for cam in kwargs["training_cameras"].gs_cameras], ["000000.png", "000002.png"])
+        self.assertEqual([cam.image_name for cam in kwargs["pointmap_cameras"].gs_cameras], ["000000.png", "000002.png"])
+        self.assertIsNone(kwargs["image_indices"])
+        self.assertIsNone(kwargs["n_images_in_pointmap"])
+        self.assertEqual(kwargs["image_dir"], scene_subset_images_dir)
 
 
 if __name__ == "__main__":

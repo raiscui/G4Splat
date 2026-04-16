@@ -15,7 +15,9 @@ import numpy as np
 from PIL import Image
 import torch
 
+from matcha.dm_scene.cameras import CamerasWrapper
 from matcha.pointmap.base import PointMap
+from matcha.pointmap.utils import load_colmap_scene
 
 
 _DEFAULT_VIEW_ORDER_FALLBACK = (0, 1, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9)
@@ -194,6 +196,38 @@ def _build_selected_image_paths(
             raise FileNotFoundError(f"Expected image for camera {image_name} at {image_path}")
         image_paths.append(image_path)
     return image_paths
+
+
+def _resolve_allowed_image_names(scene_root: Path) -> tuple[list[str], bool]:
+    cameras_json_path = scene_root / "cameras.json"
+    if cameras_json_path.exists():
+        with open(cameras_json_path, "r", encoding="utf-8") as handle:
+            cameras_payload = json.load(handle)
+        filepaths = cameras_payload.get("filepaths", [])
+        if filepaths:
+            return [Path(path).stem for path in filepaths], True
+
+    image_dir = _resolve_scene_image_dir(scene_root)
+    available_image_names = [
+        image_path.stem
+        for image_path in sorted(image_dir.iterdir())
+        if image_path.is_file() and image_path.suffix.lower() in {".jpg", ".jpeg", ".png"}
+    ]
+    return available_image_names, False
+
+
+def _subset_cameras_by_image_names(cameras, allowed_image_names: Sequence[str], *, allow_empty: bool = False):
+    normalized_allowed = {str(name) for name in allowed_image_names}
+    filtered_gs_cameras = [
+        gs_camera
+        for gs_camera in cameras.gs_cameras
+        if gs_camera.image_name.split(".")[0] in normalized_allowed
+    ]
+    if not filtered_gs_cameras and not allow_empty:
+        raise ValueError("No cameras matched the requested image set for GeometryCrafter sidecar generation.")
+    if isinstance(cameras, CamerasWrapper):
+        return CamerasWrapper(filtered_gs_cameras, no_p3d_cameras=getattr(cameras, "no_p3d_cameras", False))
+    return type(cameras)(filtered_gs_cameras)
 
 
 def build_interleaved_view_sequences(
@@ -931,4 +965,128 @@ def get_pointmap_from_mast3r_scene_with_geometrycrafter(
         if return_mast3r_pointmap:
             return scene_pm, mast3r_sfm_data, mast3r_pm
         return scene_pm, mast3r_sfm_data
+    return scene_pm
+
+
+def get_pointmap_from_colmap_scene_with_geometrycrafter(
+    colmap_source_path,
+    scene_source_path=None,
+    n_images_in_pointmap=None,
+    image_indices=None,
+    white_background=False,
+    eval_split=False,
+    eval_split_interval=8,
+    max_img_size=1600,
+    pointmap_img_size=512,
+    randomize_images=False,
+    max_sfm_points=200_000,
+    sfm_confidence_threshold=0.0,
+    average_focal_distances=False,
+    geometrycrafter_root: str = "/home/rais/GeometryCrafter",
+    geometrycrafter_cache_root: str | None = None,
+    geometrycrafter_view_order: str | Sequence[int] | None = None,
+    geometrycrafter_num_views: int = 12,
+    geometrycrafter_layout: str = "auto",
+    geometrycrafter_video_fps: int = 6,
+    geometrycrafter_force: bool = False,
+    geometrycrafter_parallel_sequences: int = 1,
+    geometrycrafter_args: dict[str, Any] | None = None,
+    python_executable: str | None = None,
+    sidecar_only: bool = False,
+    device="cuda",
+    return_sfm_data=False,
+):
+    if randomize_images:
+        raise NotImplementedError("Randomization of images is not implemented for the COLMAP GeometryCrafter path.")
+
+    scene_root = scene_source_path or colmap_source_path
+    colmap_scene_dict = load_colmap_scene(
+        colmap_source_path,
+        load_gt_images=True,
+        white_background=white_background,
+        max_img_size=max_img_size,
+        eval_split=eval_split,
+        eval_split_interval=eval_split_interval,
+        device=device,
+    )
+    training_cameras = colmap_scene_dict["training_cameras"]
+    test_cameras = colmap_scene_dict["test_cameras"]
+
+    # Build a pointmap-resolution camera set that matches the GeometryCrafter chart resolution contract.
+    colmap_scene_dict_pointmap = load_colmap_scene(
+        colmap_source_path,
+        load_gt_images=True,
+        white_background=white_background,
+        max_img_size=pointmap_img_size,
+        eval_split=eval_split,
+        eval_split_interval=eval_split_interval,
+        device=device,
+    )
+    image_dir = _resolve_scene_image_dir(scene_root)
+    available_image_names, image_subset_from_scene_cameras = _resolve_allowed_image_names(Path(scene_root))
+    pointmap_cameras = _subset_cameras_by_image_names(
+        colmap_scene_dict_pointmap["training_cameras"],
+        available_image_names,
+    )
+    training_cameras = _subset_cameras_by_image_names(training_cameras, available_image_names)
+    if test_cameras is not None and len(test_cameras) > 0:
+        test_cameras = _subset_cameras_by_image_names(test_cameras, available_image_names, allow_empty=True)
+
+    cache_root = Path(
+        geometrycrafter_cache_root
+        or Path(colmap_source_path) / "geometrycrafter_sidecar"
+    )
+    selected_image_indices = image_indices
+    selected_n_images_in_pointmap = n_images_in_pointmap
+    if image_subset_from_scene_cameras:
+        selected_image_indices = None
+        selected_n_images_in_pointmap = None
+    scene_pm, cache_entries = run_geometrycrafter_sidecar_from_sfm_data(
+        pointmap_cameras=pointmap_cameras,
+        training_cameras=training_cameras,
+        test_cameras=test_cameras,
+        image_dir=image_dir,
+        image_indices=selected_image_indices,
+        n_images_in_pointmap=selected_n_images_in_pointmap,
+        cache_root=cache_root,
+        geometrycrafter_root=geometrycrafter_root,
+        python_executable=python_executable,
+        view_order=geometrycrafter_view_order,
+        num_views=geometrycrafter_num_views,
+        layout=geometrycrafter_layout,
+        video_fps=geometrycrafter_video_fps,
+        force=geometrycrafter_force,
+        parallel_sequences=geometrycrafter_parallel_sequences,
+        device=device,
+        geometrycrafter_args=geometrycrafter_args,
+    )
+    scene_pm.metadata["sidecar_only"] = sidecar_only
+    metadata_view_order = (
+        list(parse_view_order(geometrycrafter_view_order, num_views=geometrycrafter_num_views))
+        if geometrycrafter_num_views > 1
+        else [0]
+    )
+    scene_pm.metadata["cache_key"] = _hash_jsonable(
+        {
+            "cache_entries": [str(entry.cache_dir) for entry in cache_entries],
+            "view_order": metadata_view_order,
+            "layout": geometrycrafter_layout,
+            "anchor_source": str(Path(colmap_source_path).resolve()),
+        }
+    )
+
+    colmap_sfm_data = {
+        "pointmap_cameras": pointmap_cameras,
+        "training_cameras": training_cameras,
+        "test_cameras": test_cameras,
+        "sfm_xyz": colmap_scene_dict["sfm_xyz"],
+        "sfm_col": colmap_scene_dict["sfm_col"],
+        "image_sfm_points": colmap_scene_dict["image_sfm_points"],
+        "max_sfm_points": max_sfm_points,
+        "sfm_confidence_threshold": sfm_confidence_threshold,
+        "average_focal_distances": average_focal_distances,
+    }
+
+    if return_sfm_data:
+        return scene_pm, colmap_sfm_data
     return scene_pm

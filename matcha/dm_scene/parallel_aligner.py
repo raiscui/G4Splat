@@ -8,6 +8,10 @@ import open3d as o3d
 from matcha.dm_scene.cameras import CamerasWrapper
 from matcha.dm_scene.meshes import get_manifold_meshes_from_pointmaps, remove_faces_from_single_mesh
 from matcha.dm_modules.adaln import AdaLN, initialize_adaln_weights
+from matcha.dm_modules.matching_limits import (
+    estimate_matching_tensor_gib,
+    matching_loss_is_safe,
+)
 from matcha.dm_modules.matcher_3d import Matcher3D, get_points_depth_in_depthmap_parallel
 from matcha.dm_deformation.encodings import ChartsEncoding, DepthEncoding, MultiResChartsEncoding
 from matcha.dm_deformation.multi_mlp import DeformationMultiMLP, initialize_multi_mlp_weights
@@ -626,6 +630,7 @@ class ParallelAligner(torch.nn.Module):
         matching_thr=None,
         use_confidence_in_matching_loss=False,
         matching_update_iters=None,
+        matching_max_pairwise_elements:int | None=None,
         gradient_loss_weight=10.,
         hessian_loss_weight=100.,
         normal_loss_weight=2.,
@@ -702,6 +707,28 @@ class ParallelAligner(torch.nn.Module):
             if gradient_masks is not None:
                 print("Using gradient masks for optimization.")
                 assert gradient_masks.shape == self._depths[..., :-1, :-1].shape
+
+        if use_matching_loss and not self.using_pts_as_reference:
+            matching_loss_safe, pairwise_elements = matching_loss_is_safe(
+                self.n_pm,
+                self.pm_h,
+                self.pm_w,
+                max_pairwise_elements=matching_max_pairwise_elements,
+            )
+            if not matching_loss_safe:
+                approx_points_gib = estimate_matching_tensor_gib(pairwise_elements, channels=3)
+                approx_scalar_gib = estimate_matching_tensor_gib(pairwise_elements)
+                print(
+                    "\n[WARNING] Disabling matching loss because the pairwise chart workload is too large.\n"
+                    f"          matching_pairwise_elements={pairwise_elements:,} exceeds "
+                    f"matching_max_pairwise_elements={matching_max_pairwise_elements:,}.\n"
+                    f"          The legacy matcher would attempt tensors on the order of "
+                    f"{approx_points_gib:.2f} GiB for point copies and {approx_scalar_gib:.2f} GiB "
+                    "per float-valued matching buffer.\n"
+                    "          To keep matching enabled, reduce pointmap.max_img_size, limit --n_charts, "
+                    "or raise alignment.matching_max_pairwise_elements."
+                )
+                use_matching_loss = False
                 
         # Prepare matcher if needed
         if use_matching_loss:

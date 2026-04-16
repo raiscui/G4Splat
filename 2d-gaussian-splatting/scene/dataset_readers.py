@@ -45,6 +45,19 @@ class SceneInfo(NamedTuple):
     nerf_normalization: dict
     ply_path: str
 
+
+def has_colmap_text_or_binary_model(model_root):
+    return (
+        (
+            os.path.exists(os.path.join(model_root, "images.bin"))
+            and os.path.exists(os.path.join(model_root, "cameras.bin"))
+        )
+        or (
+            os.path.exists(os.path.join(model_root, "images.txt"))
+            and os.path.exists(os.path.join(model_root, "cameras.txt"))
+        )
+    )
+
 def getNerfppNorm(cam_info):
     def get_center_and_diag(cam_centers):
         cam_centers = np.hstack(cam_centers)
@@ -148,8 +161,8 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
             cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     else:
-        dense_sparse_point3d_file = os.path.join(path, "dense-view-sparse/0/points3D.ply")
-        if os.path.exists(dense_sparse_point3d_file):
+        dense_sparse_root = os.path.join(path, "dense-view-sparse/0")
+        if has_colmap_text_or_binary_model(dense_sparse_root):
             print(f'[INFO]: Load cameras from dense-view-sparse for dense view training')
             try:
                 cameras_extrinsic_file = os.path.join(path, "dense-view-sparse/0", "images.bin")

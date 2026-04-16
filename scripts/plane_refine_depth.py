@@ -27,6 +27,18 @@ if __name__ == '__main__':
     parser.add_argument("--vis_plane_path", type=str, default=None)
     parser.add_argument("--anchor_view_id_json_path", type=str, default=None)
     parser.add_argument(
+        "--camera_source_path",
+        type=str,
+        default=None,
+        help="Optional camera/image source root. When provided, downstream plane refinement loads cameras from this scene instead of source_path.",
+    )
+    parser.add_argument(
+        "--artifact_source_path",
+        type=str,
+        default=None,
+        help="Optional artifact source root that defines the camera subset/order to preserve when camera_source_path is used.",
+    )
+    parser.add_argument(
         "--merge_resolution_scale",
         type=float,
         default=1.0,
@@ -41,34 +53,43 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
+    command_source_path = args.camera_source_path or args.source_path
+    artifact_source_path = args.artifact_source_path
+
     # get global 3D plane
     if args.see3d_root_path is not None:
         if args.vis_plane_path is not None:
-            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {args.source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path} --vis_plane_path {args.vis_plane_path} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
+            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {command_source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path} --vis_plane_path {args.vis_plane_path} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
         else:
-            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {args.source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
+            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {command_source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
     else:
         if args.vis_plane_path is not None:
-            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {args.source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --vis_plane_path {args.vis_plane_path} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
+            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {command_source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --vis_plane_path {args.vis_plane_path} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
         else:
-            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {args.source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
+            command = f"python 2d-gaussian-splatting/planes/merge_global_3Dplane.py --source_path {command_source_path} --pnts_path {args.pnts_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --resolution_scale {args.merge_resolution_scale} --device {args.merge_device}"
+    if artifact_source_path is not None:
+        command += f" --artifact_source_path {artifact_source_path}"
     run_command_safe(command)
 
     # refine depth with planes
     if args.see3d_root_path is not None:
-        command = f"python 2d-gaussian-splatting/planes/refine_depth_with_planes.py --source_path {args.source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path}"
+        command = f"python 2d-gaussian-splatting/planes/refine_depth_with_planes.py --source_path {command_source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path}"
     else:
-        command = f"python 2d-gaussian-splatting/planes/refine_depth_with_planes.py --source_path {args.source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution}"
+        command = f"python 2d-gaussian-splatting/planes/refine_depth_with_planes.py --source_path {command_source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution}"
+    if artifact_source_path is not None:
+        command += f" --artifact_source_path {artifact_source_path}"
     run_command_safe(command)
 
     # get confident map
     if args.see3d_root_path is None:
-        command = f"python 2d-gaussian-splatting/guidance/inconsistence_solver.py --source_path {args.source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution}"
+        command = f"python 2d-gaussian-splatting/guidance/inconsistence_solver.py --source_path {command_source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution}"
     else:
         if args.anchor_view_id_json_path is None:
-            command = f"python 2d-gaussian-splatting/guidance/inconsistence_solver.py --source_path {args.source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path}"
+            command = f"python 2d-gaussian-splatting/guidance/inconsistence_solver.py --source_path {command_source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path}"
         else:
-            command = f"python 2d-gaussian-splatting/guidance/plane_inconsistency_solver.py --source_path {args.source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path} --anchor_view_id_json_path {args.anchor_view_id_json_path}"
+            command = f"python 2d-gaussian-splatting/guidance/plane_inconsistency_solver.py --source_path {command_source_path} --plane_root_path {args.plane_root_path} --resolution {args.resolution} --see3d_root_path {args.see3d_root_path} --anchor_view_id_json_path {args.anchor_view_id_json_path}"
+    if artifact_source_path is not None:
+        command += f" --artifact_source_path {artifact_source_path}"
     run_command_safe(command)
 
     print('Plane refine depth done!')

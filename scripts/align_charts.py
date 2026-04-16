@@ -3,6 +3,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import argparse
+import inspect
 import torch
 import torch.nn.functional as F
 import yaml
@@ -27,6 +28,101 @@ def parse_optional_image_indices(raw_value):
         normalized = normalized[1:-1]
     tokens = normalized.replace(',', ' ').split()
     return [int(token) for token in tokens]
+
+
+def _validate_resolution_factor(raw_value: int) -> int:
+    resolution = int(raw_value)
+    if resolution <= 0:
+        raise ValueError(f"--resolution must be positive, got {raw_value}")
+    return resolution
+
+
+def _downscale_dimension(size: int, resolution: int) -> int:
+    if resolution == 1:
+        return int(size)
+    return max(1, int(round(float(size) / float(resolution))))
+
+
+def _resize_nhwc_tensor(tensor: torch.Tensor, target_height: int, target_width: int, *, mode: str) -> torch.Tensor:
+    if tuple(tensor.shape[1:3]) == (target_height, target_width):
+        return tensor
+    interpolate_kwargs = {
+        "input": tensor.permute(0, 3, 1, 2).float(),
+        "size": (target_height, target_width),
+        "mode": mode,
+    }
+    if mode in {"bilinear", "bicubic"}:
+        interpolate_kwargs["align_corners"] = False
+    resized = F.interpolate(**interpolate_kwargs)
+    return resized.permute(0, 2, 3, 1).to(tensor.dtype)
+
+
+def _resize_nhw_tensor(tensor: torch.Tensor, target_height: int, target_width: int, *, mode: str, threshold: float | None = None) -> torch.Tensor:
+    if tuple(tensor.shape[1:3]) == (target_height, target_width):
+        return tensor
+    interpolate_kwargs = {
+        "input": tensor[:, None].float(),
+        "size": (target_height, target_width),
+        "mode": mode,
+    }
+    if mode in {"bilinear", "bicubic"}:
+        interpolate_kwargs["align_corners"] = False
+    resized = F.interpolate(**interpolate_kwargs)[:, 0]
+    if threshold is not None:
+        return resized > threshold
+    return resized.to(tensor.dtype)
+
+
+def _clone_pointmap_like(scene_pm, **overrides):
+    init_kwargs = dict(
+        img_paths=list(scene_pm.img_paths),
+        images=overrides.get("images", scene_pm.images),
+        original_images=overrides.get("original_images", scene_pm.original_images),
+        focals=overrides.get("focals", scene_pm.focals),
+        poses=overrides.get("poses", scene_pm.poses),
+        points3d=overrides.get("points3d", scene_pm.points3d),
+        confidence=overrides.get("confidence", scene_pm.confidence),
+        masks=overrides.get("masks", scene_pm.masks),
+        device=overrides.get("device", scene_pm.device),
+    )
+    constructor = type(scene_pm)
+    signature = inspect.signature(constructor.__init__)
+    if "scene_cameras" in signature.parameters and hasattr(scene_pm, "scene_cameras"):
+        init_kwargs["scene_cameras"] = scene_pm.scene_cameras
+    if "scene_eval_cameras" in signature.parameters and hasattr(scene_pm, "scene_eval_cameras"):
+        init_kwargs["scene_eval_cameras"] = scene_pm.scene_eval_cameras
+    if "metadata" in signature.parameters and hasattr(scene_pm, "metadata"):
+        init_kwargs["metadata"] = dict(scene_pm.metadata)
+    return constructor(**init_kwargs)
+
+
+def _downsample_pointmap_for_alignment(scene_pm, resolution: int):
+    resolution = _validate_resolution_factor(resolution)
+    if resolution == 1:
+        return scene_pm
+
+    target_height = _downscale_dimension(scene_pm.points3d.shape[1], resolution)
+    target_width = _downscale_dimension(scene_pm.points3d.shape[2], resolution)
+    target_original_height = _downscale_dimension(scene_pm.original_images.shape[1], resolution)
+    target_original_width = _downscale_dimension(scene_pm.original_images.shape[2], resolution)
+
+    resized_scene_pm = _clone_pointmap_like(
+        scene_pm,
+        images=_resize_nhwc_tensor(scene_pm.images, target_height, target_width, mode="bilinear"),
+        original_images=_resize_nhwc_tensor(
+            scene_pm.original_images,
+            target_original_height,
+            target_original_width,
+            mode="bilinear",
+        ),
+        focals=scene_pm.focals / float(resolution),
+        poses=scene_pm.poses,
+        points3d=_resize_nhwc_tensor(scene_pm.points3d, target_height, target_width, mode="bilinear"),
+        confidence=_resize_nhw_tensor(scene_pm.confidence, target_height, target_width, mode="bilinear"),
+        masks=_resize_nhw_tensor(scene_pm.masks, target_height, target_width, mode="nearest", threshold=0.5),
+        device=scene_pm.device,
+    )
+    return resized_scene_pm
 
 
 def _resize_depth_maps(depth_maps: torch.Tensor, target_height: int, target_width: int) -> torch.Tensor:
@@ -79,12 +175,76 @@ def _prepare_reference_depth_maps(scene_pm, sfm_data, scaled_cameras, scale_fact
     return _resize_depth_maps(stacked_depth_maps, target_height, target_width)
 
 
+def _prepare_geometrycrafter_reference_depth_maps(scene_pm, scaled_cameras, scale_factor: float) -> torch.Tensor:
+    target_height, target_width = scene_pm.points3d.shape[1:3]
+    reference_depth_maps = []
+
+    for i_chart in range(len(scaled_cameras)):
+        points3d = scale_factor * scene_pm.points3d[i_chart].reshape(-1, 3)
+        reference_depth_values = scaled_cameras.p3d_cameras[i_chart].get_world_to_view_transform().transform_points(
+            points3d
+        )[..., 2]
+        expected_values = target_height * target_width
+        if reference_depth_values.numel() != expected_values:
+            raise RuntimeError(
+                f"GeometryCrafter reference depth count for chart {i_chart} is {reference_depth_values.numel()}, "
+                f"but chart resolution is {target_height}x{target_width} ({expected_values} values)."
+            )
+        reference_depth_maps.append(reference_depth_values.view(1, target_height, target_width))
+
+    return torch.cat(reference_depth_maps, dim=0)
+
+
+def _prepare_geometrycrafter_reference_point_clouds(sfm_data, scaled_cameras, scale_factor: float):
+    reference_points = []
+    for i_chart in range(len(scaled_cameras)):
+        image_name = scaled_cameras.gs_cameras[i_chart].image_name.split('.')[0]
+        point_ids = sfm_data['image_sfm_points'][image_name]
+        if len(point_ids) == 0:
+            raise RuntimeError(f"No COLMAP sparse points available for chart {i_chart} ({image_name}).")
+        reference_points.append(scale_factor * sfm_data['sfm_xyz'][point_ids])
+    return reference_points
+
+
+def _prepare_alignment_masks(
+    *,
+    scene_pm,
+    mast3r_pm,
+    masking_config,
+    use_geometrycrafter_masks: bool,
+) -> torch.Tensor | None:
+    if not masking_config['use_masks_for_alignment']:
+        return None
+
+    target_height, target_width = scene_pm.points3d.shape[1:3]
+    if use_geometrycrafter_masks:
+        geometrycrafter_masks = scene_pm.masks
+        geometrycrafter_masks = _resize_boolean_maps(
+            geometrycrafter_masks,
+            target_height=target_height,
+            target_width=target_width,
+        )
+        return geometrycrafter_masks
+
+    if mast3r_pm is None:
+        raise ValueError("mast3r_pm is required when using MASt3R-based alignment masks.")
+
+    mast3r_masks = mast3r_pm.confidence > masking_config['sfm_mask_threshold']
+    mast3r_masks = _resize_boolean_maps(
+        mast3r_masks,
+        target_height=target_height,
+        target_width=target_width,
+    )
+    return mast3r_masks
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
     # Scene arguments
     parser.add_argument('-s', '--source_path', type=str, required=True)
     parser.add_argument('-m', '--mast3r_scene', type=str, required=True)
+    parser.add_argument('--colmap_scene', type=str, default=None)
     parser.add_argument('-o', '--output_path', type=str, default=None)
     parser.add_argument('--depth_model', type=str, default="depthanythingv2")
     parser.add_argument(
@@ -147,8 +307,15 @@ if __name__ == '__main__':
     
     # Config
     parser.add_argument('-c', '--config', type=str, default='default')
+    parser.add_argument(
+        '--resolution',
+        type=int,
+        default=1,
+        help='Downsampling factor for align_charts inputs. Use 2 for half-resolution, 4 for quarter-resolution.',
+    )
     
     args = parser.parse_args()
+    args.resolution = _validate_resolution_factor(args.resolution)
     
     # Set console
     CONSOLE = Console(width=120)
@@ -185,6 +352,7 @@ if __name__ == '__main__':
 
     if use_geometrycrafter:
         from matcha.pointmap.geometrycrafter import (
+            get_pointmap_from_colmap_scene_with_geometrycrafter,
             get_pointmap_from_mast3r_scene_with_geometrycrafter,
             parse_view_order,
         )
@@ -209,24 +377,38 @@ if __name__ == '__main__':
             "low_memory_usage": args.geometrycrafter_low_memory_usage,
         }
 
-        scene_pm, sfm_data, mast3r_pm = get_pointmap_from_mast3r_scene_with_geometrycrafter(
-            scene_source_path=args.source_path,
+        geometrycrafter_kwargs = dict(
             n_images_in_pointmap=args.n_charts,
             image_indices=parsed_image_indices,
             white_background=args.white_background,
-            mast3r_scene_source_path=args.mast3r_scene,
             geometrycrafter_root=args.geometrycrafter_repo,
             geometrycrafter_cache_root=args.geometrycrafter_cache_root or os.path.join(args.output_path, 'geometrycrafter_cache'),
             geometrycrafter_num_views=args.geometrycrafter_num_views,
-            geometrycrafter_view_order=parse_view_order(args.geometrycrafter_view_order),
+            geometrycrafter_view_order=parse_view_order(
+                args.geometrycrafter_view_order,
+                num_views=args.geometrycrafter_num_views,
+            ),
             geometrycrafter_parallel_sequences=args.geometrycrafter_parallel_sequences,
             geometrycrafter_args=geometrycrafter_args,
             sidecar_only=args.geometry_prior_mode == 'sidecar-only',
             device=device,
             return_sfm_data=True,
-            return_mast3r_pointmap=True,
             **pm_config,
         )
+        if args.colmap_scene is not None:
+            scene_pm, sfm_data = get_pointmap_from_colmap_scene_with_geometrycrafter(
+                colmap_source_path=args.colmap_scene,
+                scene_source_path=args.source_path,
+                **geometrycrafter_kwargs,
+            )
+            mast3r_pm = None
+        else:
+            scene_pm, sfm_data, mast3r_pm = get_pointmap_from_mast3r_scene_with_geometrycrafter(
+                mast3r_scene_source_path=args.mast3r_scene,
+                return_mast3r_pointmap=True,
+                scene_source_path=args.source_path,
+                **geometrycrafter_kwargs,
+            )
         if args.geometry_prior_mode == 'sidecar-only':
             CONSOLE.print(f"[INFO] GeometryCrafter sidecar outputs prepared at: {scene_pm.metadata.get('cache_root')}")
             CONSOLE.print(f"[INFO] GeometryCrafter manifest: {scene_pm.metadata.get('sidecar_manifest_path')}")
@@ -249,6 +431,15 @@ if __name__ == '__main__':
             return_mast3r_pointmap=True,
             **pm_config,
         )
+
+    if args.resolution != 1:
+        original_chart_height, original_chart_width = scene_pm.points3d.shape[1:3]
+        scene_pm = _downsample_pointmap_for_alignment(scene_pm, args.resolution)
+        CONSOLE.print(
+            f"[INFO] align_charts resolution={args.resolution}: "
+            f"chart resolution {original_chart_width}x{original_chart_height} -> "
+            f"{scene_pm.points3d.shape[2]}x{scene_pm.points3d.shape[1]}"
+        )
     
     # Compute rescaling factor
     _cam_list = create_gs_cameras_from_pointmap(
@@ -267,23 +458,35 @@ if __name__ == '__main__':
     _pointmap_cameras = rescale_cameras(_pointmap_cameras, _scale_factor)
     
     # Rescale and prepare reference data based on SFM method
-    reference_data = _prepare_reference_depth_maps(
-        scene_pm,
-        sfm_data,
-        _pointmap_cameras,
-        _scale_factor,
-    )
-    if masking_config['use_masks_for_alignment']:
-        mast3r_masks = mast3r_pm.confidence > masking_config['sfm_mask_threshold']
-        mast3r_masks = _resize_boolean_maps(
-            mast3r_masks,
-            target_height=scene_pm.points3d.shape[1],
-            target_width=scene_pm.points3d.shape[2],
+    use_geometrycrafter_alignment_inputs = use_geometrycrafter and args.colmap_scene is not None
+    use_geometrycrafter_sparse_point_reference = use_geometrycrafter_alignment_inputs
+    if use_geometrycrafter_sparse_point_reference:
+        reference_data = _prepare_geometrycrafter_reference_point_clouds(
+            sfm_data,
+            _pointmap_cameras,
+            _scale_factor,
         )
-        CONSOLE.print(f"[INFO] {mast3r_masks.sum()} points in masks.")
+        if align_config.get('use_matching_loss'):
+            CONSOLE.print("[INFO] Disabling matching loss for GeometryCrafter COLMAP sparse-point alignment reference.")
+        align_config['use_matching_loss'] = False
     else:
-        mast3r_masks = None
-        CONSOLE.print("[INFO] All MASt3R-SfM points will be used for charts alignment.")
+        reference_data = _prepare_reference_depth_maps(
+            scene_pm,
+            sfm_data,
+            _pointmap_cameras,
+            _scale_factor,
+        )
+
+    alignment_masks = _prepare_alignment_masks(
+        scene_pm=scene_pm,
+        mast3r_pm=mast3r_pm,
+        masking_config=masking_config,
+        use_geometrycrafter_masks=use_geometrycrafter_alignment_inputs,
+    )
+    if alignment_masks is not None:
+        CONSOLE.print(f"[INFO] {alignment_masks.sum()} points in masks.")
+    else:
+        CONSOLE.print("[INFO] All points will be used for charts alignment.")
     
     # Align the charts
     output = align_charts_in_parallel(
@@ -291,7 +494,7 @@ if __name__ == '__main__':
         scene_pm,
         # Data parameters
         reference_data,
-        masks=mast3r_masks,
+        masks=alignment_masks,
         rendering_size=pm_config['max_img_size'],
         target_scale=scene_config['target_scale'],
         verbose=True,

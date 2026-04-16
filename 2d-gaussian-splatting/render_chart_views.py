@@ -9,6 +9,7 @@ from argparse import ArgumentParser
 from arguments import ModelParams
 
 from utils.render_utils import save_img_f32, save_img_u8
+from utils.camera_subset_utils import filter_cameras_to_artifact_subset
 from utils.general_utils import safe_state
 from matcha.dm_scene.charts import load_charts_data, build_priors_from_charts_data, depths_to_points_parallel
 from matcha.dm_utils.rendering import depth2normal_parallel
@@ -18,6 +19,7 @@ import cv2
 import matplotlib.pyplot as plt
 import trimesh
 from PIL import Image
+from argparse import Namespace
 
 def save_tensor_as_pcd(pcd, path, pcd_colors=None):
 
@@ -85,17 +87,39 @@ def camera_image_to_uint8(camera):
     image = camera.original_image.detach().cpu().permute(1, 2, 0).numpy()
     return np.clip(image * 255.0, 0, 255).astype(np.uint8)
 
+
+def save_bootstrap_refine_artifacts(save_root_path, charts_depths, charts_points, visibility_masks):
+    for idx in range(len(charts_depths)):
+        refine_depth = charts_depths[idx][0].detach().cpu().numpy()
+        save_img_f32(refine_depth, os.path.join(save_root_path, f'refine_depth_frame{idx:06d}.tiff'))
+
+        refine_points = charts_points[idx].detach().cpu().numpy()
+        save_tensor_as_pcd(refine_points, os.path.join(save_root_path, f'refine_points_frame{idx:06d}.ply'))
+
+        confident_map = (visibility_masks[idx][0].detach().cpu().numpy() > 0.5).astype(np.uint8) * 255
+        Image.fromarray(confident_map).save(os.path.join(save_root_path, f'confident_map_frame{idx:06d}.png'))
+
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
     model = ModelParams(parser, sentinel=True)
     parser.add_argument("--save_root_path", required=True, type=str)
+    parser.add_argument(
+        "--camera_source_path",
+        type=str,
+        default=None,
+        help="Optional camera/image source root. When provided, load cameras from this scene while keeping charts_data/output paths under source_path.",
+    )
     args = parser.parse_args()
 
     # Initialize system state (RNG)
     safe_state(False)
 
-    train_viewpoints, _ = load_cameras(model.extract(args))
+    camera_source_path = args.camera_source_path or args.source_path
+    camera_args = Namespace(**vars(args))
+    camera_args.source_path = camera_source_path
+    train_viewpoints, _ = load_cameras(model.extract(camera_args))
+    train_viewpoints = filter_cameras_to_artifact_subset(train_viewpoints, args.source_path)
 
     # render train views
     train_save_root_path = os.path.join(args.source_path, 'render-charts-train-views')
@@ -187,6 +211,8 @@ if __name__ == "__main__":
     save_tensor_as_pcd(vis_points, os.path.join(train_save_root_path, 'vis_points.ply'))
 
     # NOTE: copy train views render results to save_root_path
+    if os.path.exists(args.save_root_path):
+        shutil.rmtree(args.save_root_path)
     os.makedirs(args.save_root_path, exist_ok=True)
     for idx in range(len(train_viewpoints)):
         # rgb
@@ -212,5 +238,7 @@ if __name__ == "__main__":
         # visibility
         shutil.copy(os.path.join(train_save_root_path, f'visibility_frame{idx:06d}.npy'), os.path.join(args.save_root_path, f'visibility_frame{idx:06d}.npy'))
         shutil.copy(os.path.join(train_save_root_path, f'visibility_frame{idx:06d}.png'), os.path.join(args.save_root_path, f'visibility_frame{idx:06d}.png'))
+
+    save_bootstrap_refine_artifacts(args.save_root_path, charts_priors['depths'], charts_points, visibility_times_masks)
 
     print(f'Train views render done!')

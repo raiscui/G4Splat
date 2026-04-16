@@ -35,6 +35,8 @@ def remove_faces_from_single_mesh(
     
     if faces_idx_to_keep is None:
         faces_idx_to_keep = torch.arange(0, faces_to_keep_mask.shape[0], device=faces_to_keep_mask.device)[faces_to_keep_mask]
+    if faces_idx_to_keep.numel() == 0:
+        return None
     return mesh.submeshes([[faces_idx_to_keep]])
 
 
@@ -61,6 +63,8 @@ def remove_verts_from_single_mesh(
     if verts_to_keep_mask is None:
         verts_to_keep_mask = torch.zeros(mesh.verts_packed().shape[0], device=verts_idx_to_keep.device, dtype=torch.bool)
         verts_to_keep_mask[verts_idx_to_keep] = True
+    if verts_to_keep_mask.numel() == 0 or verts_to_keep_mask.sum() < 3:
+        return None
     faces = mesh.faces_packed()
     faces_mask = verts_to_keep_mask[faces].any(dim=-1)
     return remove_faces_from_single_mesh(mesh, faces_to_keep_mask=faces_mask)
@@ -220,7 +224,14 @@ def get_manifold_meshes_from_pointmaps(
 
     manifolds = []
     manifold_idx = torch.zeros(0, device=device, dtype=torch.int64)
+    skipped_pointmaps = []
     for i_ptmap in range(len(points3d)):
+        current_mask = None
+        if masks is not None:
+            current_mask = masks[i_ptmap].to(device).view(-1).bool()
+            if current_mask.sum() < 3:
+                skipped_pointmaps.append((i_ptmap, int(current_mask.sum().item()), "too_few_visible_vertices"))
+                continue
         vert_features = torch.nn.functional.pad(
             imgs[i_ptmap].view(1, -1, 3).clamp(0, 1).to(device), pad=(0, 1), value=1.,
         )
@@ -229,13 +240,20 @@ def get_manifold_meshes_from_pointmaps(
             faces=[faces],
             textures=TexturesVertex(verts_features=vert_features)
         ).to(device)
-        if (masks is not None) and masks.any().item():
-            manifold = remove_verts_from_single_mesh(manifold, verts_to_keep_mask=masks[i_ptmap].to(device).view(-1))
+        if current_mask is not None:
+            manifold = remove_verts_from_single_mesh(manifold, verts_to_keep_mask=current_mask)
+            if manifold is None:
+                skipped_pointmaps.append((i_ptmap, int(current_mask.sum().item()), "empty_mesh_after_mask"))
+                continue
         manifolds.append(manifold)
         manifold_idx = torch.cat([
             manifold_idx, 
             torch.full(size=(manifold.verts_packed().shape[0],), fill_value=i_ptmap, device=device, dtype=torch.int64)
         ])
+    if skipped_pointmaps:
+        print(f"[INFO] Skipped {len(skipped_pointmaps)} pointmaps during mesh construction: {skipped_pointmaps[:8]}")
+    if len(manifolds) == 0:
+        raise ValueError("All pointmaps were filtered out during mesh construction.")
     if return_single_mesh_object:
         manifolds = join_meshes_as_scene(manifolds)
         

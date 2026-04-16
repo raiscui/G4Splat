@@ -32,7 +32,7 @@ opacity_cull: 0.04
 percent_dense: 0.01
 
 # 几何与正则相关参数。
-depth_ratio: 0.6
+depth_ratio: 0.7
 normal_consistency_from: 4500
 distortion_from: 2000
 
@@ -52,7 +52,7 @@ max_init_gaussians: 2000000
 # 初始高斯下采样使用的体素大小。
 # 调大：最终 ply 往往更小。
 # 调小：保留更多细节，但高斯数和文件体积通常会上升。
-init_voxel_size: 0.004
+init_voxel_size: 0.005
 
 max_init_input_views: 25
 init_point_stride: 1

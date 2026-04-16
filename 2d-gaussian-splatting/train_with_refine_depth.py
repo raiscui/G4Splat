@@ -24,6 +24,7 @@ from utils.sh_utils import SH2RGB
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
+from utils.camera_subset_utils import filter_cameras_to_artifact_subset
 from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
@@ -123,6 +124,7 @@ def training(
     mip_filter_variance,
     depthanythingv2_checkpoint_dir, depthanything_encoder, 
     dense_regul, refine_depth_path, use_downsample_gaussians,
+    camera_source_path,
     max_init_gaussians, init_voxel_size, max_init_input_views, init_point_stride,
 ):
     
@@ -135,12 +137,20 @@ def training(
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
+    artifact_source_path = dataset.source_path
+    scene_dataset = copy.deepcopy(dataset)
+    scene_dataset.source_path = os.path.abspath(camera_source_path or artifact_source_path)
     
     # Sparse data
-    scene = Scene(dataset, gaussians, shuffle=False)
+    scene = Scene(scene_dataset, gaussians, shuffle=False)
+    for scale in list(scene.train_cameras.keys()):
+        scene.train_cameras[scale] = filter_cameras_to_artifact_subset(
+            scene.train_cameras[scale],
+            artifact_source_path,
+        )
 
     # NOTE: hard code for See3D root path
-    see3d_root_path = os.path.join(dataset.source_path, 'see3d_render')
+    see3d_root_path = os.path.join(artifact_source_path, 'see3d_render')
     see3d_cam_path = os.path.join(see3d_root_path, 'see3d_cameras.npz')
     inpaint_root_dir = os.path.join(see3d_root_path, 'inpainted_images')
     if os.path.exists(see3d_cam_path):
@@ -154,9 +164,9 @@ def training(
     # ===================================================================================
     # Create gaussians from charts data
     print("[INFO] Loading charts data...")
-    charts_data_path = f'{dataset.source_path}/charts_data.npz'
+    charts_data_path = f'{artifact_source_path}/charts_data.npz'
     if use_refined_charts:
-        charts_data_path = f'{dataset.source_path}/refined_charts_data.npz'
+        charts_data_path = f'{artifact_source_path}/refined_charts_data.npz'
     print("Using charts data from: ", charts_data_path)
     charts_data = load_charts_data(charts_data_path)
     charts_data['confs'] = charts_data['confs'] # - 1.  # Was not there before
@@ -233,6 +243,10 @@ def training(
         ratio_th=5.,
         normal_scale=1e-10,
         normalized_scales=0.5,
+        visibility_masks=[
+            pa_confident_maps_list[i].unsqueeze(0)
+            for i in (init_view_ids if input_view_num > max_init_gs_input_view_num else range(input_view_num))
+        ],
     )
 
     if see3d_view_num > 0:
@@ -259,6 +273,10 @@ def training(
                 ratio_th=5.,
                 normal_scale=1e-10,
                 normalized_scales=0.5,
+                visibility_masks=[
+                    pa_confident_maps_list[input_view_num + i].unsqueeze(0)
+                    for i in used_see3d_init_gs_view_list
+                ],
             )
 
         else:
@@ -272,6 +290,10 @@ def training(
                 ratio_th=5.,
                 normal_scale=1e-10,
                 normalized_scales=0.5,
+                visibility_masks=[
+                    pa_confident_maps_list[input_view_num + i].unsqueeze(0)
+                    for i in range(see3d_view_num)
+                ],
             )
 
         gaussian_params = {}
@@ -671,7 +693,7 @@ def training(
                         # Add more metrics as needed
                     }
                     # Send the data
-                    network_gui.send(net_image_bytes, dataset.source_path, metrics_dict)
+                    network_gui.send(net_image_bytes, artifact_source_path, metrics_dict)
                     if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
                         break
                 except Exception as e:
@@ -779,6 +801,12 @@ if __name__ == "__main__":
     pp = PipelineParams(parser)
     parser.add_argument("--refine_depth_path", type=str, required=True)
     parser.add_argument("--use_downsample_gaussians", action="store_true", help="Use downsample gaussians")
+    parser.add_argument(
+        "--camera_source_path",
+        type=str,
+        default=None,
+        help="Optional camera/image source root. When provided, Scene cameras are loaded from this path while charts_data / see3d artifacts remain under source_path.",
+    )
     parser.add_argument("--max_init_gaussians", type=int, default=10_000_000)
     parser.add_argument("--init_voxel_size", type=float, default=0.01)
     parser.add_argument("--max_init_input_views", type=int, default=50)
@@ -825,6 +853,7 @@ if __name__ == "__main__":
         args.normal_consistency_from, args.distortion_from, args.mip_filter_variance,
         args.depthanythingv2_checkpoint_dir, args.depthanything_encoder,
         args.dense_regul, args.refine_depth_path, args.use_downsample_gaussians,
+        args.camera_source_path,
         args.max_init_gaussians, args.init_voxel_size,
         args.max_init_input_views, args.init_point_stride,
     )

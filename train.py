@@ -25,6 +25,83 @@ def append_optional_arg(command_parts, flag, value):
         return
     command_parts.extend([flag, str(value)])
 
+
+def serialize_image_indices(image_indices):
+    if image_indices is None:
+        return None
+    return ",".join(str(int(idx)) for idx in image_indices)
+
+
+def copy_sparse_point_files(source_model_root, dest_model_root):
+    os.makedirs(dest_model_root, exist_ok=True)
+    for name in ("points3D.bin", "points3D.txt", "points3D.ply"):
+        src_path = os.path.join(source_model_root, name)
+        dst_path = os.path.join(dest_model_root, name)
+        if os.path.exists(src_path):
+            shutil.copy(src_path, dst_path)
+        else:
+            print(f"[INFO] Skipping missing sparse point file: {src_path}")
+
+
+def should_skip_initial_chart_plane_refine(depth_model, geometry_prior_mode):
+    return str(depth_model).lower() == "geometrycrafter" or geometry_prior_mode != "baseline"
+
+
+def load_or_create_dense_view_indices(source_path):
+    dense_view_json_path = os.path.join(source_path, 'dense_view.json')
+    print(f'[INFO]: Search dense view json in {dense_view_json_path}')
+    if not os.path.exists(dense_view_json_path):
+        source_img_path = os.path.join(source_path, 'images')
+        source_img_num = len(os.listdir(source_img_path))
+        dense_view_idx_list = list(range(source_img_num))
+        print(f"Use all {source_img_num} views in the source path as dense view")
+        with open(dense_view_json_path, 'w') as f:
+            json.dump({'train': dense_view_idx_list}, f)
+        print(f"Save dense view index list to {dense_view_json_path}")
+        return dense_view_json_path, dense_view_idx_list
+
+    with open(dense_view_json_path, 'r') as f:
+        dense_view_json = json.load(f)
+    dense_view_idx_list = [int(idx) for idx in dense_view_json['train']]
+    print(f"Use {len(dense_view_idx_list)} views from {dense_view_json_path} as dense view")
+    return dense_view_json_path, dense_view_idx_list
+
+
+def resolve_initial_view_selection(
+    *,
+    use_view_config,
+    source_path,
+    config_view_num,
+    n_images,
+    image_idx,
+    use_dense_view,
+    dense_view_idx_list,
+):
+    if use_view_config:
+        view_config_path = os.path.join(source_path, f'split-{config_view_num}views.json')
+        if os.path.exists(view_config_path):
+            with open(view_config_path, 'r') as f:
+                view_config = json.load(f)
+            image_idx_list = view_config['train']
+        else:
+            view_config_path = os.path.join(source_path, f'train_test_split_{config_view_num}.json')
+            with open(view_config_path, 'r') as f:
+                view_config = json.load(f)
+            image_idx_list = view_config['train_ids']
+        return None, image_idx_list, "view_config"
+
+    if image_idx is not None:
+        return None, image_idx, "explicit_image_idx"
+
+    if n_images is not None:
+        return n_images, None, "explicit_n_images"
+
+    if use_dense_view and dense_view_idx_list is not None:
+        print(f"[INFO] Bootstrapping run_sfm/align_charts from dense_view.json with {len(dense_view_idx_list)} views.")
+        return None, dense_view_idx_list, "dense_view_json"
+
+    return None, None, "all_images"
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
@@ -161,22 +238,9 @@ if __name__ == '__main__':
     tsdf_meshes_path = os.path.join(args.output_path, 'tsdf_meshes')
     tetra_meshes_path = os.path.join(args.output_path, 'tetra_meshes')
 
+    dense_view_idx_list = None
     if args.use_dense_view:
-        dense_view_json_path = os.path.join(args.source_path, 'dense_view.json')
-        print(f'[INFO]: Search dense view json in {dense_view_json_path}')
-        if not os.path.exists(dense_view_json_path):
-            source_img_path = os.path.join(args.source_path, 'images')
-            source_img_num = len(os.listdir(source_img_path))
-            dense_view_idx_list = range(source_img_num)
-            print(f"Use all {source_img_num} views in the source path as dense view")
-            with open(dense_view_json_path, 'w') as f:
-                json.dump({'train': list(dense_view_idx_list)}, f)
-            print(f"Save dense view index list to {dense_view_json_path}")
-        else:
-            with open(dense_view_json_path, 'r') as f:
-                dense_view_json = json.load(f)
-            dense_view_idx_list = dense_view_json['train']
-            print(f"Use {len(dense_view_idx_list)} views from {dense_view_json_path} as dense view")
+        _, dense_view_idx_list = load_or_create_dense_view_indices(args.source_path)
     
     # NOTE: Not use dense supervision from MAtCha
     dense_arg = ""
@@ -185,21 +249,17 @@ if __name__ == '__main__':
     if args.free_gaussians_config is None:
         args.free_gaussians_config = 'long' if args.dense_supervision else 'default'
 
-    if args.use_view_config:
-        n_images = None
-        view_config_path = os.path.join(args.source_path, f'split-{args.config_view_num}views.json')
-        if os.path.exists(view_config_path):
-            with open(view_config_path, 'r') as f:
-                view_config = json.load(f)
-            image_idx_list = view_config['train']
-        else:
-            view_config_path = os.path.join(args.source_path, f'train_test_split_{args.config_view_num}.json')
-            with open(view_config_path, 'r') as f:
-                view_config = json.load(f)
-            image_idx_list = view_config['train_ids']
-    else:
-        n_images = args.n_images
-        image_idx_list = args.image_idx
+    n_images, image_idx_list, initial_selection_source = resolve_initial_view_selection(
+        use_view_config=args.use_view_config,
+        source_path=args.source_path,
+        config_view_num=args.config_view_num,
+        n_images=args.n_images,
+        image_idx=args.image_idx,
+        use_dense_view=args.use_dense_view,
+        dense_view_idx_list=dense_view_idx_list,
+    )
+    if initial_selection_source != "all_images":
+        print(f"[INFO] Initial run_sfm/align_charts selection source: {initial_selection_source}")
     
     # Defining commands
     sfm_command = " ".join([
@@ -219,6 +279,7 @@ if __name__ == '__main__':
         "--mast3r_scene", mast3r_scene_path,
         "--output_path", aligned_charts_path,
         "--config", args.alignment_config,
+        "--resolution", str(args.resolution),
         "--depth_model", args.depth_model,
         "--geometry_prior_mode", args.geometry_prior_mode,
         "--depthanythingv2_checkpoint_dir", args.depthanythingv2_checkpoint_dir,
@@ -246,31 +307,51 @@ if __name__ == '__main__':
     append_optional_arg(align_charts_command_parts, "--geometrycrafter_track_time", args.geometrycrafter_track_time)
     append_optional_arg(align_charts_command_parts, "--geometrycrafter_low_memory_usage", args.geometrycrafter_low_memory_usage)
     append_optional_arg(align_charts_command_parts, "--geometrycrafter_parallel_sequences", args.geometrycrafter_parallel_sequences)
+    append_optional_arg(align_charts_command_parts, "--n_charts", n_images)
+    append_optional_arg(
+        align_charts_command_parts,
+        "--image_indices",
+        serialize_image_indices(image_idx_list),
+    )
+    append_optional_arg(
+        align_charts_command_parts,
+        "--colmap_scene",
+        args.source_path if args.sfm_config == "posed" else None,
+    )
     align_charts_command = " ".join(align_charts_command_parts)
     
     # NOTE: hard code plane-refine-depths path
     plane_root_path = os.path.join(mast3r_scene_path, 'plane-refine-depths')
 
-    refine_free_gaussians_command_parts = [
-        "python", "scripts/refine_free_gaussians.py",
-        "--mast3r_scene", mast3r_scene_path,
-        "--output_path", free_gaussians_path,
-        "--config", args.free_gaussians_config,
-        "--resolution", str(args.resolution),
-        "--dense_regul", args.dense_regul,
-        "--refine_depth_path", plane_root_path,
-    ]
-    if dense_arg:
-        refine_free_gaussians_command_parts.append(dense_arg)
-    if args.use_downsample_gaussians:
-        refine_free_gaussians_command_parts.append("--use_downsample_gaussians")
-    append_optional_arg(refine_free_gaussians_command_parts, "--mip_filter_variance", args.mip_filter_variance)
-    if args.checkpoint_iterations:
-        refine_free_gaussians_command_parts.extend([
-            "--checkpoint_iterations",
-            *[str(iteration) for iteration in args.checkpoint_iterations],
-        ])
-    refine_free_gaussians_command = " ".join(refine_free_gaussians_command_parts)
+    def build_refine_free_gaussians_command(include_camera_source_path: bool):
+        refine_free_gaussians_command_parts = [
+            "python", "scripts/refine_free_gaussians.py",
+            "--mast3r_scene", mast3r_scene_path,
+            "--output_path", free_gaussians_path,
+            "--config", args.free_gaussians_config,
+            "--resolution", str(args.resolution),
+            "--dense_regul", args.dense_regul,
+            "--refine_depth_path", plane_root_path,
+        ]
+        append_optional_arg(
+            refine_free_gaussians_command_parts,
+            "--camera_source_path",
+            args.source_path if include_camera_source_path and args.sfm_config == "posed" else None,
+        )
+        if dense_arg:
+            refine_free_gaussians_command_parts.append(dense_arg)
+        if args.use_downsample_gaussians:
+            refine_free_gaussians_command_parts.append("--use_downsample_gaussians")
+        append_optional_arg(refine_free_gaussians_command_parts, "--mip_filter_variance", args.mip_filter_variance)
+        if args.checkpoint_iterations:
+            refine_free_gaussians_command_parts.extend([
+                "--checkpoint_iterations",
+                *[str(iteration) for iteration in args.checkpoint_iterations],
+            ])
+        return " ".join(refine_free_gaussians_command_parts)
+
+    refine_free_gaussians_command = build_refine_free_gaussians_command(include_camera_source_path=True)
+    refine_free_gaussians_dense_view_command = build_refine_free_gaussians_command(include_camera_source_path=False)
 
     render_all_img_command = " ".join([
         "python", "2d-gaussian-splatting/render_multires.py",
@@ -329,6 +410,11 @@ if __name__ == '__main__':
         "--save_root_path", plane_root_path,
         "--resolution", str(args.resolution),
     ])
+    if args.sfm_config == "posed":
+        render_charts_command = " ".join([
+            render_charts_command,
+            "--camera_source_path", args.source_path,
+        ])
 
     generate_2Dplane_command = " ".join([
         "python", "2d-gaussian-splatting/planes/plane_excavator.py",
@@ -339,10 +425,10 @@ if __name__ == '__main__':
     pnts_path = os.path.join(mast3r_scene_path, 'chart_pcd.ply')
     vis_plane_path = os.path.join(mast3r_scene_path, 'vis_plane')
 
-    def get_plane_refine_depth_command(anchor_view_id_json_path=None, see3d_root_path=None):
+    def get_plane_refine_depth_command(anchor_view_id_json_path=None, see3d_root_path=None, include_camera_source_path=True):
         if see3d_root_path is not None:
             if anchor_view_id_json_path is not None:
-                return " ".join([
+                command = " ".join([
                     "python", "scripts/plane_refine_depth.py",
                     "--source_path", mast3r_scene_path,
                     "--plane_root_path", plane_root_path,
@@ -354,7 +440,7 @@ if __name__ == '__main__':
                     "--see3d_root_path", see3d_root_path,
                 ])
             else:
-                return " ".join([
+                command = " ".join([
                     "python", "scripts/plane_refine_depth.py",
                     "--source_path", mast3r_scene_path,
                     "--plane_root_path", plane_root_path,
@@ -365,21 +451,37 @@ if __name__ == '__main__':
                     "--see3d_root_path", see3d_root_path,
                 ])
         else:
-            return " ".join([
+            command = " ".join([
                 "python", "scripts/plane_refine_depth.py",
                 "--source_path", mast3r_scene_path,
                 "--plane_root_path", plane_root_path,
                 "--pnts_path", pnts_path,
                 "--resolution", str(args.resolution),
-                "--merge_resolution_scale", str(args.merge_resolution_scale),
-                "--merge_device", args.merge_device,
-            ])
+                    "--merge_resolution_scale", str(args.merge_resolution_scale),
+                    "--merge_device", args.merge_device,
+                ])
+        append_optional_arg(
+            command_parts := command.split(),
+            "--camera_source_path",
+            args.source_path if include_camera_source_path and args.sfm_config == "posed" else None,
+        )
+        append_optional_arg(
+            command_parts,
+            "--artifact_source_path",
+            mast3r_scene_path if include_camera_source_path and args.sfm_config == "posed" else None,
+        )
+        command = " ".join(command_parts)
+        return command
         
     see3d_root_path = os.path.join(mast3r_scene_path, 'see3d_render')
 
     render_eval_path = os.path.join(free_gaussians_path, 'train', 'ours_7000', 'renders')
 
     t1 = time.time()
+    skip_initial_chart_plane_refine = should_skip_initial_chart_plane_refine(
+        args.depth_model,
+        args.geometry_prior_mode,
+    )
     
     # run MAtCha training
     run_command_safe(sfm_command)
@@ -387,16 +489,20 @@ if __name__ == '__main__':
 
     # generate 2D planes + refine depth for input views + init gaussian training
     run_command_safe(render_charts_command)
-    run_command_safe(generate_2Dplane_command)
-    run_command_safe(get_plane_refine_depth_command(anchor_view_id_json_path=None, see3d_root_path=None))
+    if skip_initial_chart_plane_refine:
+        print("[INFO] Skipping initial chart-stage plane refinement for GeometryCrafter bootstrap; using chart depths directly.")
+    else:
+        run_command_safe(generate_2Dplane_command)
+        run_command_safe(get_plane_refine_depth_command(anchor_view_id_json_path=None, see3d_root_path=None))
     run_command_safe(refine_free_gaussians_command)
 
     if args.use_dense_view:
         # replace the sparse/0 with dense-view-sparse/0, use dense view for training
         # copy point3D files from sparse/0 to dense-view-sparse/0
-        shutil.copy(f'{mast3r_scene_path}/sparse/0/points3D.bin', f'{mast3r_scene_path}/dense-view-sparse/0/points3D.bin')
-        shutil.copy(f'{mast3r_scene_path}/sparse/0/points3D.txt', f'{mast3r_scene_path}/dense-view-sparse/0/points3D.txt')
-        shutil.copy(f'{mast3r_scene_path}/sparse/0/points3D.ply', f'{mast3r_scene_path}/dense-view-sparse/0/points3D.ply')
+        copy_sparse_point_files(
+            f'{mast3r_scene_path}/sparse/0',
+            f'{mast3r_scene_path}/dense-view-sparse/0',
+        )
 
         # render dense views
         render_dense_views_command = " ".join([
@@ -444,10 +550,10 @@ if __name__ == '__main__':
         run_command_safe(gen_dn_dense_views_command)
 
         run_command_safe(generate_2Dplane_command)
-        run_command_safe(get_plane_refine_depth_command(anchor_view_id_json_path=None, see3d_root_path=None))
+        run_command_safe(get_plane_refine_depth_command(anchor_view_id_json_path=None, see3d_root_path=None, include_camera_source_path=False))
         mv_cmd = f'mv {free_gaussians_path}/point_cloud {free_gaussians_path}/point_cloud-chart-views'
         run_command_safe(mv_cmd)
-        run_command_safe(refine_free_gaussians_command)
+        run_command_safe(refine_free_gaussians_dense_view_command)
 
         # render all images, export mesh, and evaluate
         if not args.skip_render_all_img:

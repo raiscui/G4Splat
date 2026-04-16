@@ -229,22 +229,23 @@ def get_gaussian_parameters_from_pa_data(
 ):
     """Get gaussian parameters from pa data."""
 
-    # NOTE: pa_conf temp
-    pa_conf = torch.ones((pa_points.shape[0], pa_points.shape[1], 1), device=pa_points.device, dtype=torch.float32)
-
     if visibility_masks is not None:
-        visibility_masks = torch.cat(visibility_masks, dim=0)
-        pa_conf = pa_conf * visibility_masks
-        conf_th = 0.1
-    
-    print("Conf Max/min: ", pa_conf.max(), pa_conf.min())
+        if isinstance(visibility_masks, list):
+            visibility_masks = torch.cat(visibility_masks, dim=0)
+        if visibility_masks.ndim == 4 and visibility_masks.shape[1] == 1:
+            visibility_masks = visibility_masks[:, 0]
+        visibility_masks = visibility_masks.to(pa_points.device).float()
+        conf_th = max(conf_th, 0.1)
+        mesh_masks = visibility_masks > conf_th
+        print("Visibility mask Max/min: ", visibility_masks.max(), visibility_masks.min())
+    else:
+        mesh_masks = None
     
     # Get manifold mesh and remove faces with low confidence if needed
     manifold = get_manifold_meshes_from_pointmaps(
         points3d=pa_points,
         imgs=images, 
-        # masks=pa_conf > conf_th,  
-        masks=None,
+        masks=mesh_masks,
         return_single_mesh_object=True
     )
     

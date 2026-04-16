@@ -52,6 +52,7 @@ alignment:
   # Alignment loss
   use_matching_loss: True
   matching_update_iters: null  # None/null for no matching update
+  matching_max_pairwise_elements: null  # Optional safeguard. Set an int to auto-disable matching when n_charts^2 * h * w exceeds it.
   matching_loss_weight: 5.
   matching_thr_factor: 0.05  # 1. / 20.
   use_confidence_in_matching_loss: False

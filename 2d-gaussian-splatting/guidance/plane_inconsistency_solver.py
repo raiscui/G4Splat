@@ -8,6 +8,7 @@ import numpy as np
 from argparse import ArgumentParser
 from arguments import ModelParams
 from scene.dataset_readers import load_cameras
+from utils.camera_subset_utils import filter_cameras_to_artifact_subset
 from utils.general_utils import safe_state, seed_everything
 from guidance.cam_utils import project_points_to_image
 import trimesh
@@ -22,6 +23,7 @@ if __name__ == "__main__":
     parser.add_argument("--plane_root_path", type=str, required=True)
     parser.add_argument("--see3d_root_path", type=str, default=None)
     parser.add_argument("--anchor_view_id_json_path", type=str, default=None)
+    parser.add_argument("--artifact_source_path", type=str, default=None)
     model = ModelParams(parser, sentinel=True)
     args = parser.parse_args()
 
@@ -32,6 +34,7 @@ if __name__ == "__main__":
     t1 = time.time()
 
     input_viewpoints, _ = load_cameras(model.extract(args))
+    input_viewpoints = filter_cameras_to_artifact_subset(input_viewpoints, args.artifact_source_path)
 
     if args.see3d_root_path is None:
         print('Not need to generate confident maps for see3d views!')
@@ -266,4 +269,3 @@ if __name__ == "__main__":
         print(f'********** save cat image {i} done **********')
 
     print('done')
-
