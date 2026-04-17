@@ -20,12 +20,27 @@ from utils.general_utils import safe_state
 from matcha.dm_scene.charts import depths_to_points_parallel
 
 
+def select_depth_for_export(render_pkg, depth_output_mode: str):
+    if depth_output_mode == "expected":
+        return render_pkg["rend_depth"]
+    if depth_output_mode == "surf":
+        return render_pkg["surf_depth"]
+    raise ValueError(f"Unsupported depth_output_mode: {depth_output_mode}")
+
+
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
     model = ModelParams(parser, sentinel=True)
     pipeline = PipelineParams(parser)
     parser.add_argument("--iteration", required=True, type=str)
+    parser.add_argument(
+        "--depth_output_mode",
+        type=str,
+        default="expected",
+        choices=["expected", "surf"],
+        help="Depth export mode for dense-view artifacts. 'expected' is more stable for wide/unbounded scenes; 'surf' preserves the training-time mixed surface depth.",
+    )
     args = get_combined_args(parser)
 
     # Initialize system state (RNG)
@@ -51,11 +66,12 @@ if __name__ == "__main__":
     dense_rgb_save_root_path = os.path.join(save_root_path, 'dense-gt-rgb')
     os.makedirs(render_save_root_path, exist_ok=True)
     os.makedirs(dense_rgb_save_root_path, exist_ok=True)
+    print(f"[INFO] Dense depth export mode: {args.depth_output_mode}")
     for idx, viewpoint in enumerate(train_viewpoints):
         render_pkg = render(viewpoint, gaussians, pipe, background)
         rgb = render_pkg['render']
         alpha = render_pkg['rend_alpha']
-        depth = render_pkg['surf_depth']
+        depth = select_depth_for_export(render_pkg, args.depth_output_mode)
         train_view_depths.append(depth[0].detach())
 
         gt_rgb = viewpoint.original_image.permute(1,2,0).detach().cpu().numpy()
@@ -92,5 +108,4 @@ if __name__ == "__main__":
     dense_visible_points_path = os.path.join(save_root_path, 'dense-view-points.ply')
     trimesh.PointCloud(dense_visible_points.cpu().numpy()).export(dense_visible_points_path)
     print(f'Saved dense view points to {dense_visible_points_path}')
-
 

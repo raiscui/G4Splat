@@ -79,6 +79,7 @@ def align_charts_in_parallel(
     scene_pm,
     # Data parameters
     reference_data,
+    matching_reference_depths=None,
     masks=None,
     rendering_size=1600,
     target_scale=5.,
@@ -212,6 +213,7 @@ def align_charts_in_parallel(
     
     pa.optimize(
         reference_data=reference_data,
+        matching_reference_depths=matching_reference_depths,
         masks=masks,
         n_iterations=n_iterations,
         use_gradient_loss=use_gradient_loss,

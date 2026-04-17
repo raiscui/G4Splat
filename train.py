@@ -44,7 +44,7 @@ def copy_sparse_point_files(source_model_root, dest_model_root):
 
 
 def should_skip_initial_chart_plane_refine(depth_model, geometry_prior_mode):
-    return str(depth_model).lower() == "geometrycrafter" or geometry_prior_mode != "baseline"
+    return geometry_prior_mode == "sidecar-only"
 
 
 def load_or_create_dense_view_indices(source_path):
@@ -222,6 +222,13 @@ if __name__ == '__main__':
     )
     parser.add_argument('--checkpoint_iterations', type=int, nargs='*', default=None,
         help='Checkpoint iteration list forwarded to free-gaussians refinement training.'
+    )
+    parser.add_argument(
+        '--dense_depth_output_mode',
+        type=str,
+        default='surf',
+        choices=['expected', 'surf'],
+        help='Depth export mode used by render_dense_views during the dense-view stage.',
     )
     args = parser.parse_args()
     
@@ -511,6 +518,7 @@ if __name__ == '__main__':
             "--model_path", free_gaussians_path,
             "--resolution", str(args.resolution),
             "--iteration", "7000",
+            "--depth_output_mode", args.dense_depth_output_mode,
         ])
         run_command_safe(render_dense_views_command)
 

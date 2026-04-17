@@ -1,0 +1,57 @@
+# 面向 resolution=2 的 first-stage 保远处/保几何版本。
+# 目标：
+# - 不要求 resolution=1，尽量维持现有显存级别；
+# - 比 sm14b 更积极地保住远处高斯；
+# - 避免 sm4 那种过早 densify 停止 + 过强 prune 导致远处直接塌掉。
+
+type: '2dgs'
+
+# 你之前传的 --checkpoint_iterations 18000 只影响打 checkpoint，不会让训练自动跑到 18000。
+# 这里直接把训练总步数设到 18000，给 first-stage 更多收敛时间。
+iterations: 18000
+
+# 让 densify 持续更久，避免远处结构在前期没长出来就被锁死。
+densify_from_iter: 500
+densify_until_iter: 10000
+
+# 保持较频繁的 densify/prune 循环，但不过分激进。
+densification_interval: 120
+
+# 比 sm14b 更容易触发 densify，让远处/细小结构更容易补点。
+densify_grad_threshold: 0.00018
+
+# 适中重置 opacity，避免过度稳定到错误几何。
+opacity_reset_interval: 900
+
+# 明显放宽 prune，优先避免远处弱高斯过早消失。
+opacity_cull: 0.02
+
+percent_dense: 0.01
+
+# 取中间值，避免 0.2 太 expected-like 导致远处压近，也避免高 median 偏置。
+depth_ratio: 0.45
+normal_consistency_from: 4500
+distortion_from: 2000
+
+# 先关掉 mip filter，优先观察远处细节能否保住。
+use_mip_filter: false
+mip_filter_variance: 0.08
+
+# 保持 chart-view 初始化不再额外下采样，减少第一阶段远处直接丢失。
+use_downsample_gaussians: false
+
+# 在 OOM 约束下只小幅提高预算，不像 resolution=1 那样冒险。
+max_init_gaussians: 2200000
+
+# 比 sm14 更细一点，但不激进到明显增加初始化显存峰值。
+init_voxel_size: 0.0045
+
+max_init_input_views: 25
+init_point_stride: 1
+
+# 延续 sm14 系列的长尾 depth-order 约束，防止训练后期把远近关系抹坏。
+depth_order_schedule:
+  - [1500, 1.0]
+  - [7000, 0.3]
+  - [12000, 0.1]
+  - [16000, 0.03]

@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import shutil
 from argparse import ArgumentParser
+from matcha.dm_utils.depth_trust import build_depth_agreement_mask, erode_binary_mask
 from matcha.pointmap.depthanythingv2 import load_model, apply_depthanything, depth_linear_align
 from matcha.dm_scene.cameras import GSCamera
 from PIL import Image
@@ -31,6 +32,10 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--source_path', type=str)
     parser.add_argument("--see3d_stage", required=True, type=int)
+    parser.add_argument("--warp_visible_threshold", type=float, default=0.9)
+    parser.add_argument("--warp_trust_relative_error", type=float, default=0.08)
+    parser.add_argument("--warp_trust_absolute_error", type=float, default=1.5)
+    parser.add_argument("--warp_trust_erode_radius", type=int, default=2)
     args = parser.parse_args()
 
     seed_everything()
@@ -44,7 +49,7 @@ if __name__ == "__main__":
     os.makedirs(save_root_dir, exist_ok=True)
 
     device = 'cuda'
-    visible_threshold = 0.9
+    visible_threshold = args.warp_visible_threshold
 
     # Load See3D cameras
     see3d_cameras_path = os.path.join(cur_see3d_root_dir, f'stage{args.see3d_stage}_see3d_cameras.npz')
@@ -86,10 +91,18 @@ if __name__ == "__main__":
         alpha_path = os.path.join(warp_root_dir, f'alpha_{i:06d}.npy')
         alpha = torch.from_numpy(np.load(alpha_path)).to(device)
         visible_mask = (alpha > visible_threshold)
-        np.save(os.path.join(save_root_dir, f'visibility_frame{i:06d}.npy'), visible_mask.cpu().numpy())
-        Image.fromarray((visible_mask.cpu().numpy() * 255.).astype(np.uint8)).save(os.path.join(save_root_dir, f'visibility_frame{i:06d}.png'))
 
         aligned_depth = depth_linear_align(disp=mono_disp, render_depth=warp_depth, visible_mask=visible_mask)
+        trusted_warp_mask = build_depth_agreement_mask(
+            warp_depth=warp_depth,
+            aligned_depth=aligned_depth,
+            candidate_mask=visible_mask,
+            max_relative_error=args.warp_trust_relative_error,
+            max_absolute_error=args.warp_trust_absolute_error,
+        )
+        trusted_warp_mask = erode_binary_mask(trusted_warp_mask, args.warp_trust_erode_radius)
+        np.save(os.path.join(save_root_dir, f'visibility_frame{i:06d}.npy'), trusted_warp_mask.cpu().numpy())
+        Image.fromarray((trusted_warp_mask.cpu().numpy() * 255.).astype(np.uint8)).save(os.path.join(save_root_dir, f'visibility_frame{i:06d}.png'))
         surf_normal, surf_normal_cam = get_surf_cam_normal(see3d_gs_cameras_list[i], aligned_depth.unsqueeze(0))
         surf_normal = surf_normal.permute(1,2,0)
         surf_normal_cam = surf_normal_cam.permute(1,2,0)
@@ -109,7 +122,7 @@ if __name__ == "__main__":
 
         # merge aligned depth and warp depth
         merge_depth = aligned_depth.clone()
-        merge_depth[visible_mask] = warp_depth[visible_mask]            # use warp depth when visible
+        merge_depth[trusted_warp_mask] = warp_depth[trusted_warp_mask]            # use warp depth only when it agrees with aligned depth
 
         save_img_f32(merge_depth.cpu().numpy(), os.path.join(save_root_dir, f'depth_frame{i:06d}.tiff'))
         merge_depth_path = os.path.join(save_root_dir, f'depth_frame{i:06d}.png')
@@ -118,4 +131,3 @@ if __name__ == "__main__":
         print(f'frame {i:06d} done!')
 
     print('All frames done!')
-

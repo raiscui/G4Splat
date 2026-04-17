@@ -1,0 +1,65 @@
+# 面向 dense-view 的中间型 preset：
+# 目标不是继续极限压小，而是优先减少远处细节被抹掉和几何重影未收拢的问题。
+#
+# 设计原则：
+# - 保留 sm14 的长训练与较晚 densify，给错位几何更多收拢时间。
+# - 把深度定义从过于 expected-like 的 0.2 拉回中间值，避免远处被提前“压扁”。
+# - 关闭 mip filter，先验证远处细节丢失是否主要来自额外平滑。
+# - 轻微放宽初始化预算与 prune，避免远处弱高斯过早消失。
+
+type: '2dgs'
+
+# dense-view refine 阶段的总训练步数。
+iterations: 15000
+
+# densify 调度：
+# 保持比 sm4 明显更长的 densify 窗口，让 dense-view 阶段有机会修补远处和边界。
+densify_from_iter: 500
+densify_until_iter: 8000
+
+# 每 130 步做一次 densify/prune，沿用 sm14 的节奏。
+densification_interval: 130
+
+# 比 sm14 稍微更容易触发 densify，给远处小结构更多补点机会。
+densify_grad_threshold: 0.00022
+
+# 定期重置 opacity，用来稳定后续的 prune 行为。
+opacity_reset_interval: 800
+
+# 比 sm14 更宽松，减少弱远处高斯被过早裁掉。
+opacity_cull: 0.03
+
+# Gaussian trainer 内部用于区分 clone / split 的尺度阈值比例。
+percent_dense: 0.01
+
+# 几何与正则相关参数。
+# 取 0.45 作为折中：
+# - 比 0.2 少一些 expected-depth 的“远处提前/边界发虚”
+# - 比 0.7 少一些 median-depth 的“前凸鼓包”
+depth_ratio: 0.45
+normal_consistency_from: 4500
+distortion_from: 2000
+
+# 先关闭 mip filter，优先确认远处模糊是否主要来自额外平滑。
+use_mip_filter: false
+mip_filter_variance: 0.08
+
+# 允许在训练开始前先对初始高斯做下采样。
+use_downsample_gaussians: false
+
+# dense-view 阶段的初始高斯预算上限。
+max_init_gaussians: 2500000
+
+# 初始高斯下采样使用的体素大小。
+# 比 sm14 再细一点，让初始化阶段保住更多远处结构。
+init_voxel_size: 0.004
+
+max_init_input_views: 25
+init_point_stride: 1
+
+# 深度顺序约束沿用 sm14 的较长尾调度，避免训练后期把远近关系抹坏。
+depth_order_schedule:
+  - [1500, 1.0]
+  - [6000, 0.3]
+  - [10000, 0.1]
+  - [14000, 0.03]

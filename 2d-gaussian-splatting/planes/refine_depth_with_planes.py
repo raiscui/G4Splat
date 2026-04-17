@@ -12,6 +12,7 @@ from argparse import ArgumentParser
 from arguments import ModelParams
 from matcha.dm_scene.charts import depths_to_points_parallel
 from matcha.dm_scene.cameras import GSCamera
+from matcha.dm_utils.depth_trust import build_depth_agreement_mask
 from matcha.pointmap.depthanythingv2 import depth_linear_align
 import trimesh
 import numpy as np
@@ -355,6 +356,23 @@ def should_apply_aligned_depth(
         "median_rel_error": median_rel_error,
     }
 
+
+def build_plane_replace_mask(
+    original_depth: torch.Tensor,
+    aligned_depth: torch.Tensor,
+    candidate_mask: torch.Tensor,
+    *,
+    max_relative_error: float = 0.08,
+    max_absolute_error: float = 1.5,
+):
+    return build_depth_agreement_mask(
+        warp_depth=original_depth,
+        aligned_depth=aligned_depth,
+        candidate_mask=candidate_mask,
+        max_relative_error=max_relative_error,
+        max_absolute_error=max_absolute_error,
+    )
+
 def create_overlay_visualization(rgb_image, mask_obj, transparency=0.6, color=[0, 0, 255]):
     """
     Create overlay visualization of mask on RGB image
@@ -664,7 +682,12 @@ if __name__ == "__main__":
                     f"{gate_stats}"
                 )
                 continue
-            depth_list[view_id][replace_mask] = aligned_depth[replace_mask]
+            trusted_replace_mask = build_plane_replace_mask(
+                original_depth=original_depth,
+                aligned_depth=aligned_depth,
+                candidate_mask=replace_mask,
+            )
+            depth_list[view_id][trusted_replace_mask] = aligned_depth[trusted_replace_mask]
 
     # refine non-plane region for see3d views
     for view_id in range(len(train_viewpoints)):

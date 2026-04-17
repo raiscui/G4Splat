@@ -617,9 +617,6 @@ if __name__ == '__main__':
             reference_data,
             _scale_factor,
         )
-        if align_config.get('use_matching_loss'):
-            CONSOLE.print("[INFO] Disabling matching loss for GeometryCrafter COLMAP sparse-point alignment reference.")
-        align_config['use_matching_loss'] = False
     else:
         reference_data = _prepare_reference_depth_maps(
             scene_pm,
@@ -636,6 +633,9 @@ if __name__ == '__main__':
         for i_chart in range(len(_pointmap_cameras))
     ], dim=0)
     charts_prior_confs = 4.0 * torch.ones_like(charts_prior_depths)
+    matching_reference_depths = charts_prior_depths if use_geometrycrafter_sparse_point_reference else None
+    if matching_reference_depths is not None and align_config.get('use_matching_loss'):
+        CONSOLE.print("[INFO] Using pre-aligned GeometryCrafter dense depths as matching reference while keeping sparse COLMAP points as the primary alignment anchor.")
 
     alignment_masks = _prepare_alignment_masks(
         scene_pm=scene_pm,
@@ -669,6 +669,7 @@ if __name__ == '__main__':
         scene_pm,
         # Data parameters
         reference_data,
+        matching_reference_depths=matching_reference_depths,
         masks=alignment_masks,
         rendering_size=pm_config['max_img_size'],
         target_scale=scene_config['target_scale'],

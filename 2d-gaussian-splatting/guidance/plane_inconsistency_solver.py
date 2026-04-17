@@ -8,6 +8,7 @@ import numpy as np
 from argparse import ArgumentParser
 from arguments import ModelParams
 from scene.dataset_readers import load_cameras
+from matcha.dm_utils.depth_trust import load_confident_mask_from_visibility
 from utils.camera_subset_utils import filter_cameras_to_artifact_subset
 from utils.general_utils import safe_state, seed_everything
 from guidance.cam_utils import project_points_to_image
@@ -44,9 +45,13 @@ if __name__ == "__main__":
         temp_refine_depth = Image.open(temp_refine_depth_path)
         temp_refine_depth = np.array(temp_refine_depth)
         H, W = temp_refine_depth.shape
-        confident_map_np = np.ones((H, W), dtype=np.uint8)
-        confident_map_vis = (confident_map_np * 255).astype(np.uint8)
         for view_id in range(input_view_num):
+            confident_map_np = load_confident_mask_from_visibility(
+                plane_root_path=args.plane_root_path,
+                view_id=view_id,
+                fallback_shape=(H, W),
+            )
+            confident_map_vis = (confident_map_np * 255).astype(np.uint8)
             confident_map_img_path = os.path.join(args.plane_root_path, f'confident_map_frame{view_id:06d}.png')
             Image.fromarray(confident_map_vis).save(confident_map_img_path)
 

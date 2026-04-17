@@ -13,6 +13,8 @@ Options:
   --dense-regul <name>             Dense regularization strength. Default: default
   --checkpoint-iterations <ints>   Forward checkpoint iteration list to refine_free_gaussians.py
   --mip-filter-variance <float>    Override mip filter strength during dense refinement
+  --dense-depth-output-mode <expected|surf>
+                                   Depth export mode for render_dense_views. Default: surf
   --tetra-config <name>            Tetra extraction config. Default: default
   --tetra-downsample-ratio <f>     Tetra downsample ratio. Default: 0.25
   --skip-render-all-img            Skip render_multires export before tetra extraction
@@ -108,6 +110,7 @@ GEOMETRYCRAFTER_PROCESS_LENGTH="-1"
 GEOMETRYCRAFTER_PROCESS_STRIDE="1"
 GEOMETRYCRAFTER_SEED="42"
 GEOMETRYCRAFTER_PARALLEL_SEQUENCES="1"
+DENSE_DEPTH_OUTPUT_MODE="surf"
 GEOMETRYCRAFTER_FORCE_PROJECTION=1
 GEOMETRYCRAFTER_FORCE_FIXED_FOCAL=1
 GEOMETRYCRAFTER_USE_EXTRACT_INTERP=0
@@ -141,6 +144,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --mip-filter-variance)
       MIP_FILTER_VARIANCE="$2"
+      shift 2
+      ;;
+    --dense-depth-output-mode)
+      DENSE_DEPTH_OUTPUT_MODE="$2"
       shift 2
       ;;
     --tetra-config)
@@ -303,6 +310,7 @@ echo "[INFO] Free-gaussians config: $CONFIG"
 echo "[INFO] Iteration: $ITERATION"
 echo "[INFO] Dense regul: $DENSE_REGUL"
 echo "[INFO] GeometryCrafter parallel sequences: $GEOMETRYCRAFTER_PARALLEL_SEQUENCES"
+echo "[INFO] Dense depth output mode: $DENSE_DEPTH_OUTPUT_MODE"
 
 run_cmd rm -rf "$POINT_CLOUD_DIR"
 run_cmd rm -rf "$TRAIN_DIR"
@@ -316,7 +324,8 @@ run_cmd cp -a "$BACKUP_DIR" "$POINT_CLOUD_DIR/"
 run_cmd pixi run python 2d-gaussian-splatting/render_dense_views.py \
   --source_path "$MASTR3_SCENE" \
   --model_path "$FREE_GAUSSIANS_DIR" \
-  --iteration "$ITERATION"
+  --iteration "$ITERATION" \
+  --depth_output_mode "$DENSE_DEPTH_OUTPUT_MODE"
 
 GC_CMD=(
   pixi run python 2d-gaussian-splatting/guidance/dense_gc_util.py

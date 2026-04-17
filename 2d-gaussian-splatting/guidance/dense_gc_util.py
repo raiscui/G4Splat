@@ -17,6 +17,7 @@ import torch
 
 from arguments import ModelParams, PipelineParams, get_combined_args
 from matcha.dm_scene.cameras import CamerasWrapper, GSCamera
+from matcha.dm_utils.depth_trust import build_depth_agreement_mask, erode_binary_mask
 from matcha.pointmap.depthanythingv2 import depth_linear_align
 from matcha.pointmap.geometrycrafter import (
     _resize_geometry_payload,
@@ -101,6 +102,10 @@ if __name__ == "__main__":
     parser.add_argument("--geometrycrafter_use_extract_interp", action="store_true")
     parser.add_argument("--geometrycrafter_track_time", action="store_true")
     parser.add_argument("--geometrycrafter_low_memory_usage", action="store_true")
+    parser.add_argument("--warp_visible_threshold", type=float, default=0.9)
+    parser.add_argument("--warp_trust_relative_error", type=float, default=0.08)
+    parser.add_argument("--warp_trust_absolute_error", type=float, default=1.5)
+    parser.add_argument("--warp_trust_erode_radius", type=int, default=2)
     args = get_combined_args(parser)
 
     safe_state(False)
@@ -175,7 +180,7 @@ if __name__ == "__main__":
         geometrycrafter_args=geometrycrafter_args,
     )
 
-    visible_threshold = 0.9
+    visible_threshold = args.warp_visible_threshold
     all_points = []
     for i in range(n_views):
         target_height = int(train_viewpoints[i].image_height)
@@ -200,15 +205,23 @@ if __name__ == "__main__":
         alpha = torch.from_numpy(np.load(alpha_path)).to("cuda")
         visible_mask = alpha > visible_threshold
         geometrycrafter_visible_mask = torch.from_numpy(confidence_mask).to("cuda")
-        final_visible_mask = visible_mask & geometrycrafter_visible_mask
-        np.save(os.path.join(save_root_dir, f"visibility_frame{i:06d}.npy"), final_visible_mask.cpu().numpy())
-        Image.fromarray((final_visible_mask.cpu().numpy() * 255.0).astype(np.uint8)).save(
-            os.path.join(save_root_dir, f"visibility_frame{i:06d}.png")
-        )
+        seed_visible_mask = visible_mask & geometrycrafter_visible_mask
 
         mono_depth_t = torch.from_numpy(np.clip(mono_depth, 1e-6, None)).to("cuda")
         mono_disp = 1.0 / mono_depth_t
-        aligned_depth = depth_linear_align(disp=mono_disp, render_depth=warp_depth_t, visible_mask=final_visible_mask)
+        aligned_depth = depth_linear_align(disp=mono_disp, render_depth=warp_depth_t, visible_mask=seed_visible_mask)
+        trusted_warp_mask = build_depth_agreement_mask(
+            warp_depth=warp_depth_t,
+            aligned_depth=aligned_depth,
+            candidate_mask=seed_visible_mask,
+            max_relative_error=args.warp_trust_relative_error,
+            max_absolute_error=args.warp_trust_absolute_error,
+        )
+        trusted_warp_mask = erode_binary_mask(trusted_warp_mask, args.warp_trust_erode_radius)
+        np.save(os.path.join(save_root_dir, f"visibility_frame{i:06d}.npy"), trusted_warp_mask.cpu().numpy())
+        Image.fromarray((trusted_warp_mask.cpu().numpy() * 255.0).astype(np.uint8)).save(
+            os.path.join(save_root_dir, f"visibility_frame{i:06d}.png")
+        )
         surf_normal, surf_normal_cam = get_surf_cam_normal(train_viewpoints[i], aligned_depth.unsqueeze(0))
         surf_normal = surf_normal.permute(1, 2, 0)
         surf_normal_cam = surf_normal_cam.permute(1, 2, 0)
@@ -223,7 +236,7 @@ if __name__ == "__main__":
         save_img_u8(surf_normal_cam.cpu().numpy() * 0.5 + 0.5, os.path.join(save_root_dir, f"mono_normal_frame{i:06d}.png"))
 
         merge_depth = aligned_depth.clone()
-        merge_depth[final_visible_mask] = warp_depth_t[final_visible_mask]
+        merge_depth[trusted_warp_mask] = warp_depth_t[trusted_warp_mask]
         save_img_f32(merge_depth.cpu().numpy(), os.path.join(save_root_dir, f"depth_frame{i:06d}.tiff"))
         plt.imsave(os.path.join(save_root_dir, f"depth_frame{i:06d}.png"), merge_depth.cpu().numpy(), cmap="viridis")
 

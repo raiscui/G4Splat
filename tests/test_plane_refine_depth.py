@@ -18,6 +18,7 @@ SPEC.loader.exec_module(REFINE_DEPTH_MODULE)
 
 GeneralPlaneRegressor = REFINE_DEPTH_MODULE.GeneralPlaneRegressor
 should_apply_aligned_depth = REFINE_DEPTH_MODULE.should_apply_aligned_depth
+build_plane_replace_mask = REFINE_DEPTH_MODULE.build_plane_replace_mask
 
 
 class PlaneRefineDepthTests(unittest.TestCase):
@@ -58,6 +59,16 @@ class PlaneRefineDepthTests(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertEqual(stats["reason"], "quality_gate_failed")
+
+    def test_build_plane_replace_mask_filters_large_local_depth_jumps(self):
+        original = torch.tensor([10.0, 10.0, 10.0, 10.0], dtype=torch.float32)
+        aligned = torch.tensor([10.2, 10.4, 16.0, 9.9], dtype=torch.float32)
+        candidate_mask = torch.tensor([True, True, True, False])
+
+        replace_mask = build_plane_replace_mask(original, aligned, candidate_mask)
+
+        expected = torch.tensor([True, True, False, False])
+        self.assertTrue(torch.equal(replace_mask.cpu(), expected))
 
 
 if __name__ == "__main__":

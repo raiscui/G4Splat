@@ -32,7 +32,9 @@ opacity_cull: 0.04
 percent_dense: 0.01
 
 # 几何与正则相关参数。
-depth_ratio: 0.7
+# 之前的 0.7 会让 dense render 更偏向 median depth，
+# 在这类长走廊/大深度跨度场景里容易把远处“鼓”到前面来。
+depth_ratio: 0.2
 normal_consistency_from: 4500
 distortion_from: 2000
 # depth_order_schedule:

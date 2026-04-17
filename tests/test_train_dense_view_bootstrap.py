@@ -93,8 +93,9 @@ class TrainDenseViewBootstrapTests(unittest.TestCase):
         self.assertTrue((dest_root / "points3D.txt").exists())
         self.assertFalse((dest_root / "points3D.ply").exists())
 
-    def test_should_skip_initial_chart_plane_refine_for_geometrycrafter(self):
-        self.assertTrue(should_skip_initial_chart_plane_refine("geometrycrafter", "hybrid-override-at-align-prep"))
+    def test_should_skip_initial_chart_plane_refine_only_for_sidecar_mode(self):
+        self.assertFalse(should_skip_initial_chart_plane_refine("geometrycrafter", "hybrid-override-at-align-prep"))
+        self.assertTrue(should_skip_initial_chart_plane_refine("geometrycrafter", "sidecar-only"))
         self.assertFalse(should_skip_initial_chart_plane_refine("depthanythingv2", "baseline"))
 
 

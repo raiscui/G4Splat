@@ -626,6 +626,7 @@ class ParallelAligner(torch.nn.Module):
     def optimize(
         self,
         reference_data:torch.Tensor,
+        matching_reference_depths:torch.Tensor | None=None,
         masks:torch.Tensor=None,
         gradient_masks:torch.Tensor=None,
         n_iterations=600,
@@ -664,6 +665,8 @@ class ParallelAligner(torch.nn.Module):
         Args:
             reference_data (torch.Tensor): Should have shape (n_charts, h, w), 
                 or can be a list or tensor containing n_charts tensors of shape (n_points_in_chart, 3).
+            matching_reference_depths (torch.Tensor, optional): Dense depth maps used only for chart
+                matching/reprojection correspondence initialization when the primary reference is sparse.
             n_iterations (int, optional): _description_. Defaults to 600.
             use_gradient_loss (bool, optional): _description_. Defaults to True.
             use_hessian_loss (bool, optional): _description_. Defaults to False.
@@ -716,7 +719,11 @@ class ParallelAligner(torch.nn.Module):
                 print("Using gradient masks for optimization.")
                 assert gradient_masks.shape == self._depths[..., :-1, :-1].shape
 
-        if use_matching_loss and not self.using_pts_as_reference:
+        matcher_reference_depths = matching_reference_depths
+        if matcher_reference_depths is None and not self.using_pts_as_reference:
+            matcher_reference_depths = reference_depths
+
+        if use_matching_loss and matcher_reference_depths is not None:
             matching_loss_safe, pairwise_elements = matching_loss_is_safe(
                 self.n_pm,
                 self.pm_h,
@@ -740,9 +747,11 @@ class ParallelAligner(torch.nn.Module):
                 
         # Prepare matcher if needed
         if use_matching_loss:
-            if self.using_pts_as_reference:
-                raise NotImplementedError("Matching loss is not implemented yet for point clouds.")
-            matcher = Matcher3D(cameras=self.cameras, reference_depths=reference_depths)
+            if matcher_reference_depths is None:
+                raise NotImplementedError(
+                    "Matching loss requires dense matching_reference_depths when the primary reference is sparse."
+                )
+            matcher = Matcher3D(cameras=self.cameras, reference_depths=matcher_reference_depths)
             if matching_thr is None:
                 matching_thr = self.cameras.get_spatial_extent() / 20.
             matcher.match(matching_thr)
