@@ -34,14 +34,21 @@ pixi run python scripts/generate_view_split.py \
 pixi run python scripts/preview_depth_tiff.py \
 data/nt6_sm9-2/mast3r_sfm/plane-refine-depths/refine_depth_frame000000.tiff
 
+
+pixi run python scripts/export_g4_render_camera.py \
+--colmap-dir /autodl-fs/data/fastgs/nt1_sr \
+--indices "[0]" \
+--resolution 1280x720 \
+--output /path/to/camera_trajectory.json
+
 ```
 
 
 ```bash
 
-CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
--s /autodl-fs/data/fastgs/nt1_sr \
--o data/nt1_sm10 \
+CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
+-s /autodl-fs/data/fastgs/nt7_sr \
+-o data/nt7_sm10 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -55,7 +62,7 @@ CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
  ; /usr/bin/shutdown
 
 
-CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
+CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 -s /autodl-fs/data/fastgs/nt6_sr \
 -o /autodl-fs/data/g4/nt6_sm9 \
 --sfm_config posed \
