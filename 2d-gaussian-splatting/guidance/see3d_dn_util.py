@@ -31,6 +31,15 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--source_path', type=str)
     parser.add_argument("--see3d_stage", required=True, type=int)
+    parser.add_argument(
+        "--visible-threshold",
+        type=float,
+        default=0.99,
+        help=(
+            "Only trust rendered See3D depth where alpha exceeds this threshold. "
+            "Higher values reject semi-transparent floaters before they overwrite mono-aligned depth."
+        ),
+    )
     args = parser.parse_args()
 
     seed_everything()
@@ -44,7 +53,8 @@ if __name__ == "__main__":
     os.makedirs(save_root_dir, exist_ok=True)
 
     device = 'cuda'
-    visible_threshold = 0.9
+    visible_threshold = args.visible_threshold
+    print(f"[INFO] see3d_dn_util visible threshold: {visible_threshold}")
 
     # Load See3D cameras
     see3d_cameras_path = os.path.join(cur_see3d_root_dir, f'stage{args.see3d_stage}_see3d_cameras.npz')
@@ -118,4 +128,3 @@ if __name__ == "__main__":
         print(f'frame {i:06d} done!')
 
     print('All frames done!')
-

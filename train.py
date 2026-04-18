@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import json
+import yaml
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
 import shutil
@@ -120,6 +121,13 @@ if __name__ == '__main__':
     # Free Gaussians refinement default config
     if args.free_gaussians_config is None:
         args.free_gaussians_config = 'long' if args.dense_supervision else 'default'
+
+    free_gaussians_config_path = os.path.join('configs', 'free_gaussians_refinement', args.free_gaussians_config + '.yaml')
+    if os.path.exists(free_gaussians_config_path):
+        with open(free_gaussians_config_path, 'r') as f:
+            free_gaussians_config = yaml.safe_load(f) or {}
+    else:
+        free_gaussians_config = {}
 
     if args.use_view_config:
         n_images = None
@@ -309,11 +317,18 @@ if __name__ == '__main__':
         run_command_safe(render_dense_views_command)
 
         # generate depth and normal for dense views
+        dense_visible_threshold = free_gaussians_config.get('visible-threshold', free_gaussians_config.get('visible_threshold', 0.99))
+        dense_max_visible_rgb_error = free_gaussians_config.get(
+            'max-visible-rgb-error',
+            free_gaussians_config.get('max_visible_rgb_error'),
+        )
         gen_dn_dense_views_command = " ".join([
             "python", "2d-gaussian-splatting/guidance/dense_dn_util.py",
             "--source_path", mast3r_scene_path,
             "--model_path", free_gaussians_path,
             "--iteration", "7000",
+            "--visible-threshold", str(dense_visible_threshold),
+            "--max-visible-rgb-error", str(dense_max_visible_rgb_error) if dense_max_visible_rgb_error is not None else "",
         ])
         run_command_safe(gen_dn_dense_views_command)
 

@@ -1,5 +1,7 @@
 python train.py -s data/denseview/scan1 -o output/denseview/scan1 --sfm_config posed --use_view_config --config_view_num 20  --tetra_downsample_ratio 0.25 --use_dense_view
 
+
+
 ```bash
 CUDA_VISIBLE_DEVICES=1 python train.py \
 -s data/denseview/scan1 \
@@ -27,22 +29,19 @@ pixi run python scripts/generate_view_split.py \
 
 ```
 
+```bash
+
+pixi run python scripts/preview_depth_tiff.py \
+data/nt6_sm9-2/mast3r_sfm/plane-refine-depths/refine_depth_frame000000.tiff
+
+```
+
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
--s /autodl-fs/data/fastgs/dm7_sr \
--o /autodl-fs/data/g4/dm7_sr \
---sfm_config posed \
---use_view_config \
---config_view_num 25 \
---tetra_downsample_ratio 0.25 \
---use_dense_view \
---free_gaussians_config dense_compact_sm
-
 
 CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
--s /autodl-fs/data/fastgs/nt4_sr \
--o /autodl-fs/data/g4/nt4_sr \
+-s /autodl-fs/data/fastgs/nt1_sr \
+-o data/nt1_sm10 \
 --sfm_config posed \
 --use_view_config \
 --config_view_num 25 \
@@ -50,8 +49,24 @@ CUDA_VISIBLE_DEVICES=1 pixi run python train.py \
 --use_dense_view \
 --resolution 2 \
 --merge_device cuda \
---merge_resolution_scale 2 \
---free_gaussians_config dense_compact_sm
+--merge_resolution_scale 1 \
+--free_gaussians_config dense_compact_sm10
+
+ ; /usr/bin/shutdown
+
+
+CUDA_VISIBLE_DEVICES=0 pixi run python train.py \
+-s /autodl-fs/data/fastgs/nt6_sr \
+-o /autodl-fs/data/g4/nt6_sm9 \
+--sfm_config posed \
+--use_view_config \
+--config_view_num 25 \
+--tetra_downsample_ratio 0.25 \
+--use_dense_view \
+--resolution 2 \
+--merge_device cuda \
+--merge_resolution_scale 1 \
+--free_gaussians_config dense_compact_sm8
 
 
 ```

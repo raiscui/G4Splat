@@ -26,6 +26,14 @@ def append_optional_arg(command_parts, flag, value):
         return
     command_parts.extend([flag, str(value)])
 
+
+def append_depth_order_schedule(command_parts, schedule):
+    if not schedule:
+        return
+
+    serialized_schedule = ",".join(f"{int(iteration)}:{float(weight)}" for iteration, weight in schedule)
+    command_parts.extend(["--depth_order_schedule", serialized_schedule])
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
@@ -100,6 +108,7 @@ if __name__ == '__main__':
             command_parts.extend(dense_arg.split())
 
         append_optional_arg(command_parts, "--use_mip_filter", config.get("use_mip_filter", False))
+        append_optional_arg(command_parts, "--mip_filter_variance", config.get("mip_filter_variance"))
         append_optional_arg(command_parts, "--densify_from_iter", config.get("densify_from_iter"))
         append_optional_arg(command_parts, "--densification_interval", config.get("densification_interval"))
         append_optional_arg(command_parts, "--densify_grad_threshold", config.get("densify_grad_threshold"))
@@ -109,6 +118,7 @@ if __name__ == '__main__':
         append_optional_arg(command_parts, "--init_voxel_size", config.get("init_voxel_size"))
         append_optional_arg(command_parts, "--max_init_input_views", config.get("max_init_input_views"))
         append_optional_arg(command_parts, "--init_point_stride", config.get("init_point_stride"))
+        append_depth_order_schedule(command_parts, config.get("depth_order_schedule"))
 
         if args.use_downsample_gaussians or config.get("use_downsample_gaussians", False):
             command_parts.append("--use_downsample_gaussians")

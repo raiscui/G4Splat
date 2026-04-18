@@ -37,6 +37,24 @@ if __name__ == "__main__":
     model = ModelParams(parser, sentinel=True)
     pipeline = PipelineParams(parser)
     parser.add_argument("--iteration", required=True, type=str)
+    parser.add_argument(
+        "--visible-threshold",
+        type=float,
+        default=0.99,
+        help=(
+            "Only trust rendered dense depth where alpha exceeds this threshold. "
+            "Higher values reject semi-transparent floaters before they overwrite mono-aligned depth."
+        ),
+    )
+    parser.add_argument(
+        "--max-visible-rgb-error",
+        type=float,
+        default=None,
+        help=(
+            "Optional mean absolute RGB error gate between rendered RGB and GT RGB in [0, 1]. "
+            "Pixels above this error are treated as unreliable even if alpha is high."
+        ),
+    )
     args = get_combined_args(parser)
 
     # Initialize system state (RNG)
@@ -64,7 +82,10 @@ if __name__ == "__main__":
     os.makedirs(save_root_dir, exist_ok=True)
 
     device = 'cuda'
-    visible_threshold = 0.9
+    visible_threshold = args.visible_threshold
+    print(f"[INFO] dense_dn_util visible threshold: {visible_threshold}")
+    if args.max_visible_rgb_error is not None:
+        print(f"[INFO] dense_dn_util max visible RGB error: {args.max_visible_rgb_error}")
 
     # 1. rgb
     for i in range(n_views):
@@ -101,6 +122,12 @@ if __name__ == "__main__":
         alpha_path = os.path.join(warp_root_dir, f'alpha_{i:06d}.npy')
         alpha = torch.from_numpy(np.load(alpha_path)).to(device)
         visible_mask = (alpha > visible_threshold)
+        if args.max_visible_rgb_error is not None:
+            render_rgb_path = os.path.join(warp_root_dir, f'ori_warp_frame{i:06d}.png')
+            render_rgb = np.array(Image.open(render_rgb_path)) / 255.0
+            render_rgb = torch.from_numpy(render_rgb).to(device).float()
+            rgb_error = torch.abs(render_rgb - rgb).mean(dim=-1)
+            visible_mask = visible_mask & (rgb_error < args.max_visible_rgb_error)
         np.save(os.path.join(save_root_dir, f'visibility_frame{i:06d}.npy'), visible_mask.cpu().numpy())
         Image.fromarray((visible_mask.cpu().numpy() * 255.).astype(np.uint8)).save(os.path.join(save_root_dir, f'visibility_frame{i:06d}.png'))
 
@@ -139,4 +166,3 @@ if __name__ == "__main__":
     dst_dense_view_points_path = os.path.join(save_root_dir, 'dense-view-points.ply')
     shutil.copy(src_dense_view_points_path, dst_dense_view_points_path)
     print(f'Copied dense view points to {dst_dense_view_points_path}')
-

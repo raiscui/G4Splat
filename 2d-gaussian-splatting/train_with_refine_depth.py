@@ -116,6 +116,40 @@ def subsample_init_geometry(pa_points_stack, images, point_stride):
     return pa_points_stack, images
 
 
+DEFAULT_DEPTH_ORDER_SCHEDULE = [
+    (1_500, 1.0),
+    (3_000, 0.1),
+    (4_500, 0.01),
+    (6_000, 0.001),
+]
+
+
+def parse_depth_order_schedule(schedule_arg):
+    if schedule_arg is None:
+        return None
+    if schedule_arg == "":
+        return []
+
+    schedule = []
+    for item in schedule_arg.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        iteration_str, weight_str = item.split(":", maxsplit=1)
+        schedule.append((int(iteration_str), float(weight_str)))
+    return schedule
+
+
+def get_scheduled_depth_order_weight(iteration, schedule):
+    lambda_depth_order = 0.0
+    for start_iteration, weight in sorted(schedule, key=lambda pair: pair[0]):
+        if iteration >= start_iteration:
+            lambda_depth_order = weight
+        else:
+            break
+    return lambda_depth_order
+
+
 def training(
     dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, 
     use_refined_charts, use_mip_filter, dense_data_path, use_chart_view_every_n_iter,
@@ -123,6 +157,7 @@ def training(
     depthanythingv2_checkpoint_dir, depthanything_encoder, 
     dense_regul, refine_depth_path, use_downsample_gaussians,
     max_init_gaussians, init_voxel_size, max_init_input_views, init_point_stride,
+    mip_filter_variance, depth_order_schedule,
 ):
     
     save_log_images = False
@@ -390,7 +425,7 @@ def training(
     if use_mip_filter:
         print("[INFO] Using mip filter during training.")
         gaussians.set_mip_filter(use_mip_filter)
-        gaussians.compute_mip_filter(cameras=total_views_list)
+        gaussians.compute_mip_filter(cameras=total_views_list, filter_variance=mip_filter_variance)
 
     # # ===================================================================================
     
@@ -402,6 +437,7 @@ def training(
     use_depth_order_regularization = True
     if use_depth_order_regularization:
         print(f"[INFO] Using depth order regularization for charts.")
+        print(f"[INFO] Depth order schedule: {depth_order_schedule}")
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -488,21 +524,11 @@ def training(
         
         # Depth order regularization
         if use_depth_order_regularization:
-            # TODO: Hyperparameters and scheduling should not be hardcoded
             depth_order_loss_max_pixel_shift_ratio = 0.05
             depth_order_loss_log_space = True
             depth_order_loss_log_scale = 20.
-            
-            # Scheduling
-            lambda_depth_order = 0.
-            if iteration > 1_500:
-                lambda_depth_order = 1.
-            if iteration > 3_000:
-                lambda_depth_order = 0.1
-            if iteration > 4_500:
-                lambda_depth_order = 0.01
-            if iteration > 6_000:
-                lambda_depth_order = 0.001
+
+            lambda_depth_order = get_scheduled_depth_order_weight(iteration, depth_order_schedule)
                 
             # Compute depth prior loss
             # order_supervision_depth = charts_prior_depths[viewpoint_idx].to(surf_depth.device)
@@ -633,7 +659,7 @@ def training(
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
                     gaussians.densify_and_prune(opt.densify_grad_threshold, opt.opacity_cull, scene.cameras_extent, size_threshold)
                     if gaussians.use_mip_filter:
-                        gaussians.compute_mip_filter(cameras=total_views_list)
+                        gaussians.compute_mip_filter(cameras=total_views_list, filter_variance=mip_filter_variance)
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -642,7 +668,7 @@ def training(
                 if iteration < opt.iterations - 100:  # don't update in the end of training
                     torch.cuda.empty_cache()
                     if gaussians.use_mip_filter:
-                        gaussians.compute_mip_filter(cameras=total_views_list)
+                        gaussians.compute_mip_filter(cameras=total_views_list, filter_variance=mip_filter_variance)
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -792,6 +818,13 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--use_refined_charts", action="store_true", default=False)
     parser.add_argument("--use_mip_filter", action="store_true", default=False)
+    parser.add_argument("--mip_filter_variance", type=float, default=0.2)
+    parser.add_argument(
+        "--depth_order_schedule",
+        type=str,
+        default=None,
+        help="Comma-separated iteration:weight pairs, e.g. 1500:1.0,7000:0.3",
+    )
     parser.add_argument("--dense_data_path", type=str, default=None)
     parser.add_argument("--use_chart_view_every_n_iter", type=int, default=999_999)
     parser.add_argument("--normal_consistency_from", type=int, default=3500)
@@ -800,6 +833,7 @@ if __name__ == "__main__":
     parser.add_argument('--depthanything_encoder', type=str, default='vitl')
     parser.add_argument('--dense_regul', type=str, default='default', help='Strength of dense regularization. Can be "default", "strong", "weak", or "none".')
     args = parser.parse_args(sys.argv[1:])
+    args.depth_order_schedule = parse_depth_order_schedule(args.depth_order_schedule) or DEFAULT_DEPTH_ORDER_SCHEDULE
     args.save_iterations.append(args.iterations)
     
     print("Optimizing " + args.model_path)
@@ -825,6 +859,7 @@ if __name__ == "__main__":
         args.dense_regul, args.refine_depth_path, args.use_downsample_gaussians,
         args.max_init_gaussians, args.init_voxel_size,
         args.max_init_input_views, args.init_point_stride,
+        args.mip_filter_variance, args.depth_order_schedule,
     )
 
     # All done

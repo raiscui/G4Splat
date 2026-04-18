@@ -13,6 +13,7 @@ distortion_from: 1500
 use_mip_filter: true
 use_downsample_gaussians: true
 max_init_gaussians: 8000000
+visible-threshold: 0.99
 init_voxel_size: 0.008
 
 max_init_input_views: 25
